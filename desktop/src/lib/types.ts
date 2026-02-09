@@ -416,3 +416,30 @@ export interface ArchiveStatusResponse {
   total_size: number;
   project_count: number;
 }
+
+// ── Git types ────────────────────────────────
+
+export interface GitRemoteStatus {
+  name: string;
+  url: string;
+  ahead: number;
+  behind: number;
+}
+
+export interface GitStatus {
+  has_uncommitted: boolean;
+  uncommitted_count: number;
+  current_branch: string | null;
+  remotes: GitRemoteStatus[];
+}
+
+export interface GitStatusPayload {
+  path: string;
+  status: GitStatus;
+}
+
+export interface PushRemoteResult {
+  remote: string;
+  success: boolean;
+  error: string | null;
+}

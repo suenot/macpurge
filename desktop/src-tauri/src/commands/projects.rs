@@ -15,6 +15,19 @@ pub struct ProjectSizePayload {
 }
 
 #[derive(Clone, serde::Serialize)]
+pub struct GitStatusPayload {
+    pub path: String,
+    pub status: macpurge::GitStatus,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct PushRemoteResult {
+    pub remote: String,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, serde::Serialize)]
 pub struct ArchiveProgressPayload {
     pub project_name: String,
     pub status: String, // "copying", "deleting_source", "completed", "error"
@@ -402,4 +415,55 @@ pub async fn get_archive_status() -> Result<ArchiveStatusResponse, String> {
         total_size,
         project_count,
     })
+}
+
+// ── Git status & actions ────────────────────────
+
+/// Check git status for a project and emit event
+#[tauri::command]
+pub async fn check_git_status(app: AppHandle, path: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    if !path_buf.exists() {
+        return Err("Path does not exist".to_string());
+    }
+
+    if let Some(status) = macpurge::ProjectScanner::get_git_status(&path_buf) {
+        let _ = app.emit("project-git-status", GitStatusPayload {
+            path,
+            status,
+        });
+    }
+
+    Ok(())
+}
+
+/// Auto-commit all changes in a project
+#[tauri::command]
+pub async fn auto_commit_project(path: String) -> Result<String, String> {
+    let path_buf = PathBuf::from(&path);
+    macpurge::ProjectScanner::auto_commit(&path_buf).map_err(|e| e.to_string())
+}
+
+/// Push to a specific remote
+#[tauri::command]
+pub async fn push_project(path: String, remote: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    macpurge::ProjectScanner::push_to_remote(&path_buf, &remote).map_err(|e| e.to_string())
+}
+
+/// Push to all remotes
+#[tauri::command]
+pub async fn push_project_all(path: String) -> Result<Vec<PushRemoteResult>, String> {
+    let path_buf = PathBuf::from(&path);
+    let results = macpurge::ProjectScanner::push_to_all_remotes(&path_buf)
+        .map_err(|e| e.to_string())?;
+
+    Ok(results
+        .into_iter()
+        .map(|(remote, result)| PushRemoteResult {
+            remote,
+            success: result.is_ok(),
+            error: result.err(),
+        })
+        .collect())
 }

@@ -34,6 +34,8 @@ import type {
   ProjectSizePayload,
   ArchiveProgressPayload,
   ArchiveStatusResponse,
+  GitStatusPayload,
+  PushRemoteResult,
 } from './types';
 
 // Disk commands
@@ -267,6 +269,27 @@ export function onProjectSizeCalculated(callback: (payload: ProjectSizePayload) 
 
 export function onArchiveProgress(callback: (payload: ArchiveProgressPayload) => void): Promise<UnlistenFn> {
   return listen<ArchiveProgressPayload>('archive-progress', (event) => callback(event.payload));
+}
+
+// Git commands
+export async function checkGitStatus(path: string): Promise<void> {
+  return invoke('check_git_status', { path });
+}
+
+export async function autoCommitProject(path: string): Promise<string> {
+  return invoke<string>('auto_commit_project', { path });
+}
+
+export async function pushProject(path: string, remote: string): Promise<void> {
+  return invoke('push_project', { path, remote });
+}
+
+export async function pushProjectAll(path: string): Promise<PushRemoteResult[]> {
+  return invoke<PushRemoteResult[]>('push_project_all', { path });
+}
+
+export function onProjectGitStatus(callback: (payload: GitStatusPayload) => void): Promise<UnlistenFn> {
+  return listen<GitStatusPayload>('project-git-status', (event) => callback(event.payload));
 }
 
 // Helper to check if running in Tauri

@@ -86,6 +86,11 @@ pub fn run() {
             commands::projects::list_archived_projects,
             commands::projects::restore_projects,
             commands::projects::get_archive_status,
+            // Git commands
+            commands::projects::check_git_status,
+            commands::projects::auto_commit_project,
+            commands::projects::push_project,
+            commands::projects::push_project_all,
         ])
         .run(tauri::generate_context!())
         .expect("error while running MacPurge");

@@ -24,6 +24,7 @@ pub use scanner::{
     // Project scanner
     ProjectType, ProjectInfo, ProjectScanner,
     ArchivedProjectEntry, ArchiveManifest,
+    GitRemoteStatus, GitStatus,
     load_archive_manifest, save_archive_manifest,
     copy_dir_recursive, unique_dest_path,
 };

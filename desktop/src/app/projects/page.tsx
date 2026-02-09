@@ -19,6 +19,9 @@ import {
   Clock,
   HardDrive,
   Settings,
+  ArrowUp,
+  GitCommitHorizontal,
+  Upload,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import Link from 'next/link';
@@ -31,6 +34,10 @@ import {
   getArchiveStatus,
   onProjectSizeCalculated,
   onArchiveProgress,
+  checkGitStatus,
+  autoCommitProject,
+  pushProjectAll,
+  onProjectGitStatus,
   isTauri,
 } from '@/lib/tauri';
 import type {
@@ -39,6 +46,7 @@ import type {
   ArchivedProjectEntry,
   ArchiveProgressPayload,
   ArchiveStatusResponse,
+  GitStatus,
 } from '@/lib/types';
 import { formatBytes } from '@/lib/types';
 
@@ -89,12 +97,17 @@ export default function ProjectsPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [sizesLoaded, setSizesLoaded] = useState(false);
+  const [gitStatuses, setGitStatuses] = useState<Map<string, GitStatus>>(new Map());
+  const [gitStatusesLoaded, setGitStatusesLoaded] = useState(false);
+  const [actionLoading, setActionLoading] = useState<Map<string, string>>(new Map());
 
   // Load projects
   const loadProjects = useCallback(async () => {
     setIsScanning(true);
     setError(null);
     setSizesLoaded(false);
+    setGitStatusesLoaded(false);
+    setGitStatuses(new Map());
 
     try {
       const [projectList, archived, status] = await Promise.all([
@@ -155,6 +168,37 @@ export default function ProjectsPage() {
       unlisten?.();
     };
   }, [projects.length, sizesLoaded]);
+
+  // Background git status scanning
+  useEffect(() => {
+    const gitProjects = projects.filter(p => p.has_git);
+    if (gitProjects.length === 0 || gitStatusesLoaded) return;
+
+    let unlisten: (() => void) | undefined;
+    let mounted = true;
+
+    const setup = async () => {
+      unlisten = await onProjectGitStatus((payload) => {
+        if (!mounted) return;
+        setGitStatuses(prev => {
+          const next = new Map(prev);
+          next.set(payload.path, payload.status);
+          return next;
+        });
+      });
+
+      for (const project of gitProjects) {
+        checkGitStatus(project.path).catch(console.error);
+      }
+      setGitStatusesLoaded(true);
+    };
+
+    setup();
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
+  }, [projects.length, gitStatusesLoaded]);
 
   // Archive progress events
   useEffect(() => {
@@ -266,6 +310,55 @@ export default function ProjectsPage() {
     } finally {
       setIsArchiving(false);
       setArchiveProgress(new Map());
+    }
+  };
+
+  // Git actions
+  const handleAutoCommit = async (path: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setActionLoading(prev => new Map(prev).set(path, 'commit'));
+    setError(null);
+
+    try {
+      const hash = await autoCommitProject(path);
+      setSuccess(`Committed: ${hash}`);
+      setTimeout(() => setSuccess(null), 3000);
+      // Refresh git status for this project
+      checkGitStatus(path).catch(console.error);
+    } catch (err) {
+      setError(err as string);
+    } finally {
+      setActionLoading(prev => {
+        const next = new Map(prev);
+        next.delete(path);
+        return next;
+      });
+    }
+  };
+
+  const handlePushAll = async (path: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setActionLoading(prev => new Map(prev).set(path, 'push'));
+    setError(null);
+
+    try {
+      const results = await pushProjectAll(path);
+      const failed = results.filter(r => !r.success);
+      if (failed.length > 0) {
+        setError(`Push failed for: ${failed.map(r => `${r.remote} (${r.error})`).join(', ')}`);
+      } else {
+        setSuccess(`Pushed to ${results.map(r => r.remote).join(', ')}`);
+        setTimeout(() => setSuccess(null), 3000);
+      }
+      checkGitStatus(path).catch(console.error);
+    } catch (err) {
+      setError(err as string);
+    } finally {
+      setActionLoading(prev => {
+        const next = new Map(prev);
+        next.delete(path);
+        return next;
+      });
     }
   };
 
@@ -476,6 +569,10 @@ export default function ProjectsPage() {
               const typeConf = projectTypeConfig[project.project_type];
               const isSelected = selectedPaths.has(project.path);
               const displayTime = project.last_commit_time ?? project.last_modified;
+              const gitStatus = gitStatuses.get(project.path);
+              const isCommitting = actionLoading.get(project.path) === 'commit';
+              const isPushing = actionLoading.get(project.path) === 'push';
+              const totalAhead = gitStatus?.remotes.reduce((s, r) => s + r.ahead, 0) ?? 0;
 
               return (
                 <motion.div
@@ -508,11 +605,72 @@ export default function ProjectsPage() {
                       {project.has_git && (
                         <GitBranch className="w-3 h-3 text-slate-500" />
                       )}
+                      {gitStatus?.current_branch && (
+                        <span className="text-[10px] text-slate-500 font-mono">
+                          {gitStatus.current_branch}
+                        </span>
+                      )}
                     </div>
-                    <p className="text-xs text-slate-500 font-mono truncate mt-0.5">
-                      {project.path}
-                    </p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <p className="text-xs text-slate-500 font-mono truncate">
+                        {project.path}
+                      </p>
+                      {/* Git status indicators */}
+                      {gitStatus && gitStatus.has_uncommitted && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 flex-shrink-0 flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-yellow-400" />
+                          {gitStatus.uncommitted_count} changes
+                        </span>
+                      )}
+                      {gitStatus && totalAhead > 0 && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 flex-shrink-0 flex items-center gap-1">
+                          <ArrowUp className="w-2.5 h-2.5" />
+                          {totalAhead} unpushed
+                        </span>
+                      )}
+                      {gitStatus && gitStatus.remotes.length > 1 && (
+                        <span className="text-[10px] text-slate-600 flex-shrink-0">
+                          {gitStatus.remotes.map(r => r.name).join(', ')}
+                        </span>
+                      )}
+                    </div>
                   </div>
+
+                  {/* Git action buttons */}
+                  {gitStatus && (gitStatus.has_uncommitted || totalAhead > 0) && (
+                    <div className="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                      {gitStatus.has_uncommitted && (
+                        <button
+                          onClick={(e) => handleAutoCommit(project.path, e)}
+                          disabled={isCommitting}
+                          className="px-2 py-1 rounded-lg text-[10px] font-medium bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 hover:bg-yellow-500/20 transition-all flex items-center gap-1"
+                          title="Auto commit all changes"
+                        >
+                          {isCommitting ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <GitCommitHorizontal className="w-3 h-3" />
+                          )}
+                          Commit
+                        </button>
+                      )}
+                      {totalAhead > 0 && (
+                        <button
+                          onClick={(e) => handlePushAll(project.path, e)}
+                          disabled={isPushing}
+                          className="px-2 py-1 rounded-lg text-[10px] font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20 transition-all flex items-center gap-1"
+                          title={`Push to ${gitStatus.remotes.map(r => r.name).join(', ')}`}
+                        >
+                          {isPushing ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <Upload className="w-3 h-3" />
+                          )}
+                          Push All
+                        </button>
+                      )}
+                    </div>
+                  )}
 
                   {/* Artifact badge */}
                   {project.artifact_size != null && project.artifact_size > 0 && (

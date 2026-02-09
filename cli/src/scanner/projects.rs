@@ -131,6 +131,24 @@ pub struct ProjectInfo {
     pub artifact_size: Option<u64>,
 }
 
+/// Git remote status (ahead/behind per remote)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitRemoteStatus {
+    pub name: String,
+    pub url: String,
+    pub ahead: u32,
+    pub behind: u32,
+}
+
+/// Git status for a project
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitStatus {
+    pub has_uncommitted: bool,
+    pub uncommitted_count: u32,
+    pub current_branch: Option<String>,
+    pub remotes: Vec<GitRemoteStatus>,
+}
+
 /// Archived project manifest entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArchivedProjectEntry {
@@ -154,6 +172,7 @@ pub struct ProjectScanner;
 
 impl ProjectScanner {
     /// Scan project directories for projects (fast, no size calculation).
+    /// Checks 2 levels deep: immediate children + children of non-project folders.
     /// Returns projects sorted by last_modified descending.
     pub fn scan_projects(project_dirs: &[PathBuf]) -> Vec<ProjectInfo> {
         let mut projects = Vec::new();
@@ -183,23 +202,31 @@ impl ProjectScanner {
                 let project_type = ProjectType::detect(&path);
                 let has_git = path.join(".git").exists();
 
-                // Skip directories that are neither a recognized project nor a git repo
-                if project_type == ProjectType::Unknown && !has_git {
-                    continue;
+                if project_type != ProjectType::Unknown || has_git {
+                    // Depth-1: this is a project
+                    projects.push(make_project_info(name, path, project_type, has_git));
+                } else {
+                    // Depth-2: check children of this grouping folder
+                    let sub_entries = match fs::read_dir(&path) {
+                        Ok(e) => e,
+                        Err(_) => continue,
+                    };
+                    for sub_entry in sub_entries.flatten() {
+                        let sub_path = sub_entry.path();
+                        if !sub_path.is_dir() {
+                            continue;
+                        }
+                        let sub_name = match sub_path.file_name().and_then(|n| n.to_str()) {
+                            Some(n) if !n.starts_with('.') => n.to_string(),
+                            _ => continue,
+                        };
+                        let sub_type = ProjectType::detect(&sub_path);
+                        let sub_git = sub_path.join(".git").exists();
+                        if sub_type != ProjectType::Unknown || sub_git {
+                            projects.push(make_project_info(sub_name, sub_path, sub_type, sub_git));
+                        }
+                    }
                 }
-
-                let last_modified = get_dir_mtime(&path);
-
-                projects.push(ProjectInfo {
-                    name,
-                    path,
-                    size_bytes: None,
-                    last_modified,
-                    project_type,
-                    has_git,
-                    last_commit_time: None,
-                    artifact_size: None,
-                });
             }
         }
 
@@ -249,6 +276,175 @@ impl ProjectScanner {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         stdout.trim().parse::<i64>().ok()
+    }
+
+    /// Get detailed git status: uncommitted changes, branch, remotes with ahead/behind
+    pub fn get_git_status(project_path: &Path) -> Option<GitStatus> {
+        if !project_path.join(".git").exists() {
+            return None;
+        }
+
+        let path_str = project_path.to_string_lossy();
+
+        // git status --porcelain
+        let uncommitted_count = Command::new("git")
+            .args(["-C", &path_str, "status", "--porcelain"])
+            .output()
+            .ok()
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .filter(|l| !l.is_empty())
+                    .count() as u32
+            })
+            .unwrap_or(0);
+
+        // git branch --show-current
+        let current_branch = Command::new("git")
+            .args(["-C", &path_str, "branch", "--show-current"])
+            .output()
+            .ok()
+            .and_then(|o| {
+                let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if s.is_empty() { None } else { Some(s) }
+            });
+
+        // git remote -v (parse fetch lines)
+        let remotes_output = Command::new("git")
+            .args(["-C", &path_str, "remote", "-v"])
+            .output()
+            .ok();
+
+        let mut remotes = Vec::new();
+        let mut seen_remotes = std::collections::HashSet::new();
+
+        if let Some(output) = remotes_output {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                // format: "origin\tgit@github.com:user/repo.git (fetch)"
+                if !line.contains("(fetch)") {
+                    continue;
+                }
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() < 2 {
+                    continue;
+                }
+                let remote_name = parts[0].to_string();
+                if !seen_remotes.insert(remote_name.clone()) {
+                    continue;
+                }
+                let url = parts[1].to_string();
+
+                // Calculate ahead/behind for this remote + current branch
+                let (ahead, behind) = if let Some(ref branch) = current_branch {
+                    let remote_ref = format!("{}/{}", remote_name, branch);
+                    let ahead = git_rev_count(&path_str, &format!("{}..HEAD", remote_ref));
+                    let behind = git_rev_count(&path_str, &format!("HEAD..{}", remote_ref));
+                    (ahead, behind)
+                } else {
+                    (0, 0)
+                };
+
+                remotes.push(GitRemoteStatus {
+                    name: remote_name,
+                    url,
+                    ahead,
+                    behind,
+                });
+            }
+        }
+
+        Some(GitStatus {
+            has_uncommitted: uncommitted_count > 0,
+            uncommitted_count,
+            current_branch,
+            remotes,
+        })
+    }
+
+    /// Auto-commit all changes with a standard message.
+    /// Returns the commit hash on success.
+    pub fn auto_commit(project_path: &Path) -> anyhow::Result<String> {
+        let path_str = project_path.to_string_lossy();
+
+        // git add -A
+        let add_output = Command::new("git")
+            .args(["-C", &path_str, "add", "-A"])
+            .output()?;
+        if !add_output.status.success() {
+            anyhow::bail!(
+                "git add failed: {}",
+                String::from_utf8_lossy(&add_output.stderr)
+            );
+        }
+
+        // git commit -m "macpurge auto commit"
+        let commit_output = Command::new("git")
+            .args(["-C", &path_str, "commit", "-m", "macpurge auto commit"])
+            .output()?;
+        if !commit_output.status.success() {
+            let stderr = String::from_utf8_lossy(&commit_output.stderr);
+            anyhow::bail!("git commit failed: {}", stderr);
+        }
+
+        // Get the commit hash
+        let hash_output = Command::new("git")
+            .args(["-C", &path_str, "rev-parse", "--short", "HEAD"])
+            .output()?;
+        let hash = String::from_utf8_lossy(&hash_output.stdout).trim().to_string();
+
+        Ok(hash)
+    }
+
+    /// Push current branch to a specific remote
+    pub fn push_to_remote(project_path: &Path, remote: &str) -> anyhow::Result<()> {
+        let path_str = project_path.to_string_lossy();
+
+        // Get current branch
+        let branch_output = Command::new("git")
+            .args(["-C", &path_str, "branch", "--show-current"])
+            .output()?;
+        let branch = String::from_utf8_lossy(&branch_output.stdout).trim().to_string();
+        if branch.is_empty() {
+            anyhow::bail!("Not on a branch (detached HEAD?)");
+        }
+
+        let push_output = Command::new("git")
+            .args(["-C", &path_str, "push", remote, &branch])
+            .output()?;
+        if !push_output.status.success() {
+            let stderr = String::from_utf8_lossy(&push_output.stderr);
+            anyhow::bail!("git push {} failed: {}", remote, stderr);
+        }
+
+        Ok(())
+    }
+
+    /// Push current branch to all remotes.
+    /// Returns a list of (remote_name, result) for each push attempt.
+    pub fn push_to_all_remotes(project_path: &Path) -> anyhow::Result<Vec<(String, Result<(), String>)>> {
+        let path_str = project_path.to_string_lossy();
+
+        // List remotes
+        let remote_output = Command::new("git")
+            .args(["-C", &path_str, "remote"])
+            .output()?;
+        let remote_text = String::from_utf8_lossy(&remote_output.stdout);
+        let remotes: Vec<&str> = remote_text.lines().filter(|l| !l.is_empty()).collect();
+
+        if remotes.is_empty() {
+            anyhow::bail!("No remotes configured");
+        }
+
+        let mut results = Vec::new();
+        for remote in remotes {
+            match Self::push_to_remote(project_path, remote) {
+                Ok(()) => results.push((remote.to_string(), Ok(()))),
+                Err(e) => results.push((remote.to_string(), Err(e.to_string()))),
+            }
+        }
+
+        Ok(results)
     }
 }
 
@@ -316,7 +512,38 @@ pub fn unique_dest_path(archive_dir: &Path, name: &str) -> PathBuf {
     }
 }
 
+/// Create a ProjectInfo from scanned directory data
+fn make_project_info(name: String, path: PathBuf, project_type: ProjectType, has_git: bool) -> ProjectInfo {
+    let last_modified = get_dir_mtime(&path);
+    ProjectInfo {
+        name,
+        path,
+        size_bytes: None,
+        last_modified,
+        project_type,
+        has_git,
+        last_commit_time: None,
+        artifact_size: None,
+    }
+}
+
 // ── Helper functions ─────────────────────────────
+
+/// Count commits in a git revision range (e.g., "origin/main..HEAD")
+fn git_rev_count(path_str: &str, range: &str) -> u32 {
+    Command::new("git")
+        .args(["-C", path_str, "rev-list", "--count", range])
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                String::from_utf8_lossy(&o.stdout).trim().parse().ok()
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0)
+}
 
 /// Check if any file in a directory has one of the given extensions
 fn has_extension_in_dir(dir: &Path, extensions: &[&str]) -> bool {
