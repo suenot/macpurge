@@ -50,6 +50,15 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Tauri
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+
+# Landing (if not a submodule)
+landing/node_modules/
+landing/.next/
+landing/out/
+
 # Misc
 *.tmp
 *.bak
