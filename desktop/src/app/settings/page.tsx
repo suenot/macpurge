@@ -8,21 +8,30 @@ import {
   Check,
   X,
   AlertCircle,
-  Folder
+  Folder,
+  Archive,
+  HardDrive,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import {
   getConfig,
   addProjectDir,
   removeProjectDir,
+  setArchiveDir,
+  clearArchiveDir,
+  getArchiveStatus,
   isTauri
 } from '@/lib/tauri';
-import type { ConfigResponse, ProjectDir } from '@/lib/types';
+import type { ConfigResponse, ProjectDir, ArchiveStatusResponse } from '@/lib/types';
+import { formatBytes } from '@/lib/types';
 
 export default function SettingsPage() {
   const [config, setConfig] = useState<ConfigResponse | null>(null);
   const [newPath, setNewPath] = useState('');
+  const [archivePath, setArchivePath] = useState('');
+  const [archiveStatus, setArchiveStatus] = useState<ArchiveStatusResponse | null>(null);
   const [isAdding, setIsAdding] = useState(false);
+  const [isSettingArchive, setIsSettingArchive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -31,8 +40,12 @@ export default function SettingsPage() {
 
     const loadConfig = async () => {
       try {
-        const cfg = await getConfig();
+        const [cfg, status] = await Promise.all([
+          getConfig(),
+          getArchiveStatus(),
+        ]);
         setConfig(cfg);
+        setArchiveStatus(status);
       } catch (err) {
         setError(err as string);
       }
@@ -69,6 +82,43 @@ export default function SettingsPage() {
       const cfg = await removeProjectDir(path);
       setConfig(cfg);
       setSuccess('Directory removed');
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      setError(err as string);
+    }
+  };
+
+  const handleSetArchiveDir = async () => {
+    if (!archivePath.trim()) return;
+
+    setIsSettingArchive(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const cfg = await setArchiveDir(archivePath.trim());
+      setConfig(cfg);
+      setArchivePath('');
+      const status = await getArchiveStatus();
+      setArchiveStatus(status);
+      setSuccess('Archive directory set');
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      setError(err as string);
+    } finally {
+      setIsSettingArchive(false);
+    }
+  };
+
+  const handleClearArchiveDir = async () => {
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const cfg = await clearArchiveDir();
+      setConfig(cfg);
+      setArchiveStatus(null);
+      setSuccess('Archive directory cleared');
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
       setError(err as string);
@@ -197,6 +247,73 @@ export default function SettingsPage() {
             </div>
           ))}
         </div>
+      </section>
+
+      {/* Archive Location */}
+      <section className="glass-card p-6 rounded-2xl">
+        <h2 className="text-lg font-semibold text-white mb-2">
+          Archive Location
+        </h2>
+        <p className="text-sm text-slate-400 mb-6 max-w-2xl">
+          Set the directory where archived projects will be stored. This is typically an external
+          drive or cloud storage folder.
+        </p>
+
+        {config?.archive_dir ? (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between py-3 px-4 rounded-xl bg-white/5 border border-white/5">
+              <div className="flex items-center gap-3 min-w-0">
+                <Archive className="w-5 h-5 text-brand-400 flex-shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-slate-200 truncate">
+                    {config.archive_dir}
+                  </p>
+                  {archiveStatus && (
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {archiveStatus.exists
+                        ? `${archiveStatus.project_count} projects, ${formatBytes(archiveStatus.total_size)}`
+                        : 'Directory not accessible (disk not connected?)'}
+                    </p>
+                  )}
+                </div>
+              </div>
+              <button
+                onClick={handleClearArchiveDir}
+                className="p-2 text-slate-500 hover:text-danger-400 hover:bg-danger-500/10 rounded-lg transition-all"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex gap-3">
+              <input
+                type="text"
+                value={archivePath}
+                onChange={(e) => setArchivePath(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSetArchiveDir()}
+                placeholder="/Volumes/External/archive"
+                className="flex-1 px-4 py-2.5 rounded-xl border border-white/10 bg-black/20 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-500 transition-all"
+              />
+              <button
+                onClick={handleSetArchiveDir}
+                disabled={isSettingArchive || !archivePath.trim()}
+                className={clsx(
+                  'px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl flex items-center gap-2 font-medium transition-all shadow-lg shadow-brand-500/20',
+                  (isSettingArchive || !archivePath.trim()) && 'opacity-50 cursor-not-allowed grayscale'
+                )}
+              >
+                <HardDrive className="w-4 h-4" />
+                Set Path
+              </button>
+            </div>
+            <div className="p-4 border border-dashed border-white/10 rounded-xl text-center">
+              <Archive className="w-6 h-6 text-slate-600 mx-auto mb-1" />
+              <p className="text-slate-400 text-sm">No archive location configured</p>
+            </div>
+          </div>
+        )}
       </section>
 
       {/* Settings Grid */}

@@ -22,6 +22,10 @@ pub fn get_config() -> Result<ConfigResponse, String> {
         })
         .collect();
 
+    let archive_dir = config.archive_dir.as_ref().map(|p| {
+        macpurge::expand_path(p).display().to_string()
+    });
+
     Ok(ConfigResponse {
         config_path: config_path.display().to_string(),
         project_dirs,
@@ -37,6 +41,7 @@ pub fn get_config() -> Result<ConfigResponse, String> {
             older_than_days: config.cleanup.older_than_days,
         },
         schedule_enabled: config.schedule.as_ref().map(|s| s.enabled).unwrap_or(false),
+        archive_dir,
     })
 }
 
@@ -120,6 +125,7 @@ pub struct ConfigResponse {
     pub scan: ScanConfigResponse,
     pub cleanup: CleanupConfigResponse,
     pub schedule_enabled: bool,
+    pub archive_dir: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -142,6 +148,31 @@ pub struct CleanupConfigResponse {
     pub use_trash: bool,
     pub log_deletions: bool,
     pub older_than_days: Option<u32>,
+}
+
+/// Set archive directory
+#[tauri::command]
+pub fn set_archive_dir(path: String) -> Result<ConfigResponse, String> {
+    let mut config = macpurge::load_config().map_err(|e| e.to_string())?;
+    let path_buf = PathBuf::from(&path);
+    let expanded = macpurge::expand_path(&path_buf);
+
+    if !expanded.exists() {
+        return Err(format!("Directory does not exist: {}", expanded.display()));
+    }
+
+    config.archive_dir = Some(path_buf);
+    macpurge::save_config(&config).map_err(|e| e.to_string())?;
+    get_config()
+}
+
+/// Clear archive directory
+#[tauri::command]
+pub fn clear_archive_dir() -> Result<ConfigResponse, String> {
+    let mut config = macpurge::load_config().map_err(|e| e.to_string())?;
+    config.archive_dir = None;
+    macpurge::save_config(&config).map_err(|e| e.to_string())?;
+    get_config()
 }
 
 #[derive(serde::Deserialize)]

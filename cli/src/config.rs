@@ -13,6 +13,10 @@ pub struct Config {
     #[serde(default)]
     pub project_dirs: Vec<PathBuf>,
 
+    /// Directory where archived projects are stored (external disk, cloud folder, etc.)
+    #[serde(default)]
+    pub archive_dir: Option<PathBuf>,
+
     /// Scan settings
     #[serde(default)]
     pub scan: ScanConfig,

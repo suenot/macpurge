@@ -12,3 +12,4 @@ pub mod system;
 pub mod devtools;
 pub mod recipes;
 pub mod schedule;
+pub mod projects;

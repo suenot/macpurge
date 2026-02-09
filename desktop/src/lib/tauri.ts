@@ -29,6 +29,11 @@ import type {
   ScheduleStatus,
   ScheduleTasks,
   ScheduleRunResult,
+  ProjectInfo,
+  ArchivedProjectEntry,
+  ProjectSizePayload,
+  ArchiveProgressPayload,
+  ArchiveStatusResponse,
 } from './types';
 
 // Disk commands
@@ -107,6 +112,14 @@ export async function addProjectDir(path: string): Promise<ConfigResponse> {
 
 export async function removeProjectDir(path: string): Promise<ConfigResponse> {
   return invoke<ConfigResponse>('remove_project_dir', { path });
+}
+
+export async function setArchiveDir(path: string): Promise<ConfigResponse> {
+  return invoke<ConfigResponse>('set_archive_dir', { path });
+}
+
+export async function clearArchiveDir(): Promise<ConfigResponse> {
+  return invoke<ConfigResponse>('clear_archive_dir');
 }
 
 // App commands
@@ -220,6 +233,40 @@ export async function disableSchedule(): Promise<void> {
 
 export async function runScheduleNow(): Promise<ScheduleRunResult> {
   return invoke<ScheduleRunResult>('run_schedule_now');
+}
+
+// Project commands
+export async function listProjects(): Promise<ProjectInfo[]> {
+  return invoke<ProjectInfo[]>('list_projects');
+}
+
+export async function calculateProjectSize(path: string): Promise<void> {
+  return invoke('calculate_project_size', { path });
+}
+
+export async function archiveProjects(paths: string[]): Promise<string[]> {
+  return invoke<string[]>('archive_projects', { paths });
+}
+
+export async function listArchivedProjects(): Promise<ArchivedProjectEntry[]> {
+  return invoke<ArchivedProjectEntry[]>('list_archived_projects');
+}
+
+export async function restoreProjects(archivedPaths: string[]): Promise<string[]> {
+  return invoke<string[]>('restore_projects', { archivedPaths });
+}
+
+export async function getArchiveStatus(): Promise<ArchiveStatusResponse> {
+  return invoke<ArchiveStatusResponse>('get_archive_status');
+}
+
+// Project event listeners
+export function onProjectSizeCalculated(callback: (payload: ProjectSizePayload) => void): Promise<UnlistenFn> {
+  return listen<ProjectSizePayload>('project-size-calculated', (event) => callback(event.payload));
+}
+
+export function onArchiveProgress(callback: (payload: ArchiveProgressPayload) => void): Promise<UnlistenFn> {
+  return listen<ArchiveProgressPayload>('archive-progress', (event) => callback(event.payload));
 }
 
 // Helper to check if running in Tauri

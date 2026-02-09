@@ -21,6 +21,11 @@ pub use scanner::{
     PkgManagerType,
     // DevTools scanner
     DevToolType, DevToolCachePath, DevToolInfo, DevToolScanResult, DevToolScanner,
+    // Project scanner
+    ProjectType, ProjectInfo, ProjectScanner,
+    ArchivedProjectEntry, ArchiveManifest,
+    load_archive_manifest, save_archive_manifest,
+    copy_dir_recursive, unique_dest_path,
 };
 
 pub use cleaners::{

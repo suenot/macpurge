@@ -52,6 +52,8 @@ pub fn run() {
             commands::config::save_config,
             commands::config::add_project_dir,
             commands::config::remove_project_dir,
+            commands::config::set_archive_dir,
+            commands::config::clear_archive_dir,
             commands::apps::list_apps,
             commands::apps::find_app_files,
             commands::apps::find_remnants,
@@ -77,6 +79,13 @@ pub fn run() {
             commands::schedule::enable_schedule_cmd,
             commands::schedule::disable_schedule_cmd,
             commands::schedule::run_schedule_now,
+            // Project commands
+            commands::projects::list_projects,
+            commands::projects::calculate_project_size,
+            commands::projects::archive_projects,
+            commands::projects::list_archived_projects,
+            commands::projects::restore_projects,
+            commands::projects::get_archive_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running MacPurge");

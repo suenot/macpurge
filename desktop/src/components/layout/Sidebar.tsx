@@ -15,7 +15,8 @@ import {
   Wifi,
   Database,
   Clock,
-  Shield
+  Shield,
+  FolderGit2
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useEffect, useState } from 'react';
@@ -25,6 +26,7 @@ import { formatBytes } from '@/lib/types';
 
 const navItems = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/projects', label: 'Projects', icon: FolderGit2 },
   { href: '/dev', label: 'Dev Artifacts', icon: Code2 },
   { href: '/packages', label: 'Packages', icon: Package },
   { href: '/system', label: 'System', icon: Shield },

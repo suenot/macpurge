@@ -83,6 +83,7 @@ export interface ConfigResponse {
   scan: ScanConfigResponse;
   cleanup: CleanupConfigResponse;
   schedule_enabled: boolean;
+  archive_dir: string | null;
 }
 
 export interface ScanConfigResponse {
@@ -354,4 +355,64 @@ export interface ScheduleRunResult {
   result: CleanResult;
   timestamp: string;
   tasks_run: string[];
+}
+
+// ── Project types ─────────────────────────────
+
+export type ProjectType =
+  | 'Node'
+  | 'Rust'
+  | 'Go'
+  | 'Python'
+  | 'Java'
+  | 'DotNet'
+  | 'Ruby'
+  | 'Php'
+  | 'Elixir'
+  | 'Haskell'
+  | 'Swift'
+  | 'Dart'
+  | 'Unknown';
+
+export interface ProjectInfo {
+  name: string;
+  path: string;
+  size_bytes: number | null;
+  last_modified: number | null;
+  project_type: ProjectType;
+  has_git: boolean;
+  last_commit_time: number | null;
+  artifact_size: number | null;
+}
+
+export interface ArchivedProjectEntry {
+  name: string;
+  original_path: string;
+  archived_path: string;
+  archived_at: number;
+  size_bytes: number;
+  project_type: ProjectType;
+}
+
+export interface ProjectSizePayload {
+  path: string;
+  size_bytes: number;
+  artifact_size: number;
+  last_commit_time: number | null;
+}
+
+export interface ArchiveProgressPayload {
+  project_name: string;
+  status: 'copying' | 'deleting_source' | 'completed' | 'error';
+  bytes_copied: number;
+  total_bytes: number;
+  error: string | null;
+}
+
+export interface ArchiveStatusResponse {
+  configured: boolean;
+  archive_path: string | null;
+  exists: boolean;
+  total_size: number;
+  project_count: number;
 }
