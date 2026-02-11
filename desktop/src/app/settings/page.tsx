@@ -20,9 +20,11 @@ import {
   setArchiveDir,
   clearArchiveDir,
   getArchiveStatus,
+  getArchiveConfig,
+  saveArchiveConfig,
   isTauri
 } from '@/lib/tauri';
-import type { ConfigResponse, ProjectDir, ArchiveStatusResponse } from '@/lib/types';
+import type { ConfigResponse, ProjectDir, ArchiveStatusResponse, ArchiveConfigResponse } from '@/lib/types';
 import { formatBytes } from '@/lib/types';
 
 export default function SettingsPage() {
@@ -32,6 +34,7 @@ export default function SettingsPage() {
   const [archiveStatus, setArchiveStatus] = useState<ArchiveStatusResponse | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [isSettingArchive, setIsSettingArchive] = useState(false);
+  const [archiveConfig, setArchiveConfig] = useState<ArchiveConfigResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -40,12 +43,14 @@ export default function SettingsPage() {
 
     const loadConfig = async () => {
       try {
-        const [cfg, status] = await Promise.all([
+        const [cfg, status, archCfg] = await Promise.all([
           getConfig(),
           getArchiveStatus(),
+          getArchiveConfig(),
         ]);
         setConfig(cfg);
         setArchiveStatus(status);
+        setArchiveConfig(archCfg);
       } catch (err) {
         setError(err as string);
       }
@@ -53,6 +58,30 @@ export default function SettingsPage() {
 
     loadConfig();
   }, []);
+
+  const handleToggleArchiveSetting = async (key: keyof ArchiveConfigResponse) => {
+    if (!archiveConfig) return;
+    const updated = { ...archiveConfig, [key]: !archiveConfig[key] };
+    try {
+      await saveArchiveConfig(updated);
+      setArchiveConfig(updated);
+      setSuccess('Setting updated');
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      setError(err as string);
+    }
+  };
+
+  const handleBatchSizeChange = async (value: number) => {
+    if (!archiveConfig || value < 1 || value > 20) return;
+    const updated = { ...archiveConfig, scan_batch_size: value };
+    try {
+      await saveArchiveConfig(updated);
+      setArchiveConfig(updated);
+    } catch (err) {
+      setError(err as string);
+    }
+  };
 
   const handleAddDir = async () => {
     if (!newPath.trim()) return;
@@ -314,6 +343,94 @@ export default function SettingsPage() {
             </div>
           </div>
         )}
+      </section>
+
+      {/* Archive Settings */}
+      <section className="glass-card p-6 rounded-2xl">
+        <h2 className="text-lg font-semibold text-white mb-2">
+          Archive Settings
+        </h2>
+        <p className="text-sm text-slate-400 mb-6 max-w-2xl">
+          Control how projects are scanned and archived.
+        </p>
+
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-medium text-slate-200">
+                Concurrent Scans
+              </p>
+              <p className="text-xs text-slate-500">
+                Number of projects to calculate sizes for in parallel
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => handleBatchSizeChange((archiveConfig?.scan_batch_size ?? 3) - 1)}
+                disabled={!archiveConfig || archiveConfig.scan_batch_size <= 1}
+                className="px-2 py-1 rounded-lg bg-black/20 border border-white/10 text-slate-300 hover:text-white hover:border-white/20 disabled:opacity-30 transition-all"
+              >
+                -
+              </button>
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-black/20 border border-white/5 min-w-[60px] justify-center">
+                <span className="text-slate-300 font-mono text-sm">
+                  {archiveConfig?.scan_batch_size ?? 3}
+                </span>
+              </div>
+              <button
+                onClick={() => handleBatchSizeChange((archiveConfig?.scan_batch_size ?? 3) + 1)}
+                disabled={!archiveConfig || archiveConfig.scan_batch_size >= 20}
+                className="px-2 py-1 rounded-lg bg-black/20 border border-white/10 text-slate-300 hover:text-white hover:border-white/20 disabled:opacity-30 transition-all"
+              >
+                +
+              </button>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between pt-4 border-t border-white/5">
+            <div>
+              <p className="font-medium text-slate-200">
+                Clean Artifacts Before Archive
+              </p>
+              <p className="text-xs text-slate-500">
+                Remove node_modules, target, venv, etc. before archiving
+              </p>
+            </div>
+            <button
+              onClick={() => handleToggleArchiveSetting('clean_artifacts_before_archive')}
+              className={clsx(
+                'px-3 py-1 rounded-full text-xs font-semibold border cursor-pointer transition-all',
+                archiveConfig?.clean_artifacts_before_archive
+                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20'
+                  : 'bg-slate-500/10 text-slate-400 border-slate-500/20 hover:bg-slate-500/20'
+              )}
+            >
+              {archiveConfig?.clean_artifacts_before_archive ? 'Enabled' : 'Disabled'}
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between pt-4 border-t border-white/5">
+            <div>
+              <p className="font-medium text-slate-200">
+                Compress to ZIP
+              </p>
+              <p className="text-xs text-slate-500">
+                Archive projects as .zip files instead of copying directories
+              </p>
+            </div>
+            <button
+              onClick={() => handleToggleArchiveSetting('compress_to_zip')}
+              className={clsx(
+                'px-3 py-1 rounded-full text-xs font-semibold border cursor-pointer transition-all',
+                archiveConfig?.compress_to_zip
+                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20'
+                  : 'bg-slate-500/10 text-slate-400 border-slate-500/20 hover:bg-slate-500/20'
+              )}
+            >
+              {archiveConfig?.compress_to_zip ? 'Enabled' : 'Disabled'}
+            </button>
+          </div>
+        </div>
       </section>
 
       {/* Settings Grid */}

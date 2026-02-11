@@ -27,6 +27,8 @@ pub use scanner::{
     GitRemoteStatus, GitStatus,
     load_archive_manifest, save_archive_manifest,
     copy_dir_recursive, unique_dest_path,
+    compress_dir_to_zip, extract_zip_to_dir,
+    clean_artifacts_from_project, unique_zip_dest_path,
 };
 
 pub use cleaners::{
@@ -57,7 +59,7 @@ pub use reporters::{
 pub use claude::ClaudeIntegration;
 
 pub use config::{
-    Config, ScanConfig, CleanupConfig, ScheduleConfig, ScheduleTasks,
+    Config, ScanConfig, CleanupConfig, ScheduleConfig, ScheduleTasks, ArchiveConfig,
     get_config_dir, get_config_path, get_history_path, get_schedule_log_path,
     load_config, save_config, init_config, expand_path, get_project_dirs,
 };

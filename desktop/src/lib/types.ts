@@ -392,6 +392,7 @@ export interface ArchivedProjectEntry {
   archived_at: number;
   size_bytes: number;
   project_type: ProjectType;
+  archive_format: string | null;
 }
 
 export interface ProjectSizePayload {
@@ -403,10 +404,22 @@ export interface ProjectSizePayload {
 
 export interface ArchiveProgressPayload {
   project_name: string;
-  status: 'copying' | 'deleting_source' | 'completed' | 'error';
+  status: 'cleaning_artifacts' | 'compressing' | 'copying' | 'deleting_source' | 'completed' | 'error' | 'extracting';
   bytes_copied: number;
   total_bytes: number;
   error: string | null;
+}
+
+export interface ArchiveConfigResponse {
+  scan_batch_size: number;
+  clean_artifacts_before_archive: boolean;
+  compress_to_zip: boolean;
+}
+
+export interface ArchiveConfigInput {
+  scan_batch_size: number;
+  clean_artifacts_before_archive: boolean;
+  compress_to_zip: boolean;
 }
 
 export interface ArchiveStatusResponse {

@@ -30,7 +30,7 @@ pub struct PushRemoteResult {
 #[derive(Clone, serde::Serialize)]
 pub struct ArchiveProgressPayload {
     pub project_name: String,
-    pub status: String, // "copying", "deleting_source", "completed", "error"
+    pub status: String, // "cleaning_artifacts", "compressing", "copying", "deleting_source", "completed", "error", "extracting"
     pub bytes_copied: u64,
     pub total_bytes: u64,
     pub error: Option<String>,
@@ -82,7 +82,7 @@ pub async fn calculate_project_size(app: AppHandle, path: String) -> Result<(), 
     Ok(())
 }
 
-/// Archive selected projects to archive_dir (copy + delete)
+/// Archive selected projects to archive_dir with optional artifact cleaning and zip compression
 #[tauri::command]
 pub async fn archive_projects(
     app: AppHandle,
@@ -102,6 +102,9 @@ pub async fn archive_projects(
         ));
     }
 
+    let clean_artifacts = config.archive.clean_artifacts_before_archive;
+    let compress_zip = config.archive.compress_to_zip;
+
     let mut archived = Vec::new();
 
     for path_str in &paths {
@@ -111,38 +114,200 @@ pub async fn archive_projects(
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
 
-        let dest = macpurge::unique_dest_path(&archive_dir, &project_name);
+        // Detect project type before cleaning (source still intact)
+        let project_type = macpurge::ProjectType::detect(&source);
 
-        // Emit: copying
-        let _ = app.emit(
-            "archive-progress",
-            ArchiveProgressPayload {
-                project_name: project_name.clone(),
-                status: "copying".to_string(),
-                bytes_copied: 0,
-                total_bytes: 0,
-                error: None,
-            },
-        );
+        // Step 1: Clean dev artifacts if enabled
+        if clean_artifacts {
+            let _ = app.emit(
+                "archive-progress",
+                ArchiveProgressPayload {
+                    project_name: project_name.clone(),
+                    status: "cleaning_artifacts".to_string(),
+                    bytes_copied: 0,
+                    total_bytes: 0,
+                    error: None,
+                },
+            );
+            macpurge::clean_artifacts_from_project(&source);
+        }
 
-        // Copy recursively
-        match macpurge::copy_dir_recursive(&source, &dest) {
-            Ok(bytes) => {
-                // Emit: deleting source
-                let _ = app.emit(
-                    "archive-progress",
-                    ArchiveProgressPayload {
-                        project_name: project_name.clone(),
-                        status: "deleting_source".to_string(),
-                        bytes_copied: bytes,
-                        total_bytes: bytes,
-                        error: None,
-                    },
-                );
+        // Step 2: Archive (zip or copy)
+        if compress_zip {
+            let dest = macpurge::unique_zip_dest_path(&archive_dir, &project_name);
 
-                // Delete source
-                if let Err(e) = std::fs::remove_dir_all(&source) {
-                    // Rollback: remove destination, keep source
+            let _ = app.emit(
+                "archive-progress",
+                ArchiveProgressPayload {
+                    project_name: project_name.clone(),
+                    status: "compressing".to_string(),
+                    bytes_copied: 0,
+                    total_bytes: 0,
+                    error: None,
+                },
+            );
+
+            match macpurge::compress_dir_to_zip(&source, &dest) {
+                Ok(zip_size) => {
+                    // Emit: deleting source
+                    let _ = app.emit(
+                        "archive-progress",
+                        ArchiveProgressPayload {
+                            project_name: project_name.clone(),
+                            status: "deleting_source".to_string(),
+                            bytes_copied: zip_size,
+                            total_bytes: zip_size,
+                            error: None,
+                        },
+                    );
+
+                    // Delete source
+                    if let Err(e) = std::fs::remove_dir_all(&source) {
+                        let _ = std::fs::remove_file(&dest);
+                        let _ = app.emit(
+                            "archive-progress",
+                            ArchiveProgressPayload {
+                                project_name: project_name.clone(),
+                                status: "error".to_string(),
+                                bytes_copied: 0,
+                                total_bytes: zip_size,
+                                error: Some(format!("Failed to remove source: {}", e)),
+                            },
+                        );
+                        continue;
+                    }
+
+                    // Update manifest
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+
+                    let mut manifest = macpurge::load_archive_manifest(&archive_dir)
+                        .unwrap_or(macpurge::ArchiveManifest {
+                            version: 1,
+                            entries: Vec::new(),
+                        });
+
+                    manifest.entries.push(macpurge::ArchivedProjectEntry {
+                        name: project_name.clone(),
+                        original_path: source.clone(),
+                        archived_path: dest.clone(),
+                        archived_at: now,
+                        size_bytes: zip_size,
+                        project_type,
+                        archive_format: Some("zip".to_string()),
+                    });
+
+                    let _ = macpurge::save_archive_manifest(&archive_dir, &manifest);
+
+                    let _ = app.emit(
+                        "archive-progress",
+                        ArchiveProgressPayload {
+                            project_name: project_name.clone(),
+                            status: "completed".to_string(),
+                            bytes_copied: zip_size,
+                            total_bytes: zip_size,
+                            error: None,
+                        },
+                    );
+
+                    archived.push(path_str.clone());
+                }
+                Err(e) => {
+                    let _ = std::fs::remove_file(&dest);
+                    let _ = app.emit(
+                        "archive-progress",
+                        ArchiveProgressPayload {
+                            project_name: project_name.clone(),
+                            status: "error".to_string(),
+                            bytes_copied: 0,
+                            total_bytes: 0,
+                            error: Some(e.to_string()),
+                        },
+                    );
+                }
+            }
+        } else {
+            // Legacy: copy directory
+            let dest = macpurge::unique_dest_path(&archive_dir, &project_name);
+
+            let _ = app.emit(
+                "archive-progress",
+                ArchiveProgressPayload {
+                    project_name: project_name.clone(),
+                    status: "copying".to_string(),
+                    bytes_copied: 0,
+                    total_bytes: 0,
+                    error: None,
+                },
+            );
+
+            match macpurge::copy_dir_recursive(&source, &dest) {
+                Ok(bytes) => {
+                    let _ = app.emit(
+                        "archive-progress",
+                        ArchiveProgressPayload {
+                            project_name: project_name.clone(),
+                            status: "deleting_source".to_string(),
+                            bytes_copied: bytes,
+                            total_bytes: bytes,
+                            error: None,
+                        },
+                    );
+
+                    if let Err(e) = std::fs::remove_dir_all(&source) {
+                        let _ = std::fs::remove_dir_all(&dest);
+                        let _ = app.emit(
+                            "archive-progress",
+                            ArchiveProgressPayload {
+                                project_name: project_name.clone(),
+                                status: "error".to_string(),
+                                bytes_copied: 0,
+                                total_bytes: bytes,
+                                error: Some(format!("Failed to remove source: {}", e)),
+                            },
+                        );
+                        continue;
+                    }
+
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+
+                    let mut manifest = macpurge::load_archive_manifest(&archive_dir)
+                        .unwrap_or(macpurge::ArchiveManifest {
+                            version: 1,
+                            entries: Vec::new(),
+                        });
+
+                    manifest.entries.push(macpurge::ArchivedProjectEntry {
+                        name: project_name.clone(),
+                        original_path: source.clone(),
+                        archived_path: dest.clone(),
+                        archived_at: now,
+                        size_bytes: bytes,
+                        project_type,
+                        archive_format: Some("directory".to_string()),
+                    });
+
+                    let _ = macpurge::save_archive_manifest(&archive_dir, &manifest);
+
+                    let _ = app.emit(
+                        "archive-progress",
+                        ArchiveProgressPayload {
+                            project_name: project_name.clone(),
+                            status: "completed".to_string(),
+                            bytes_copied: bytes,
+                            total_bytes: bytes,
+                            error: None,
+                        },
+                    );
+
+                    archived.push(path_str.clone());
+                }
+                Err(e) => {
                     let _ = std::fs::remove_dir_all(&dest);
                     let _ = app.emit(
                         "archive-progress",
@@ -150,62 +315,11 @@ pub async fn archive_projects(
                             project_name: project_name.clone(),
                             status: "error".to_string(),
                             bytes_copied: 0,
-                            total_bytes: bytes,
-                            error: Some(format!("Failed to remove source: {}", e)),
+                            total_bytes: 0,
+                            error: Some(e.to_string()),
                         },
                     );
-                    continue;
                 }
-
-                // Update manifest
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
-
-                let mut manifest = macpurge::load_archive_manifest(&archive_dir)
-                    .unwrap_or(macpurge::ArchiveManifest {
-                        version: 1,
-                        entries: Vec::new(),
-                    });
-
-                manifest.entries.push(macpurge::ArchivedProjectEntry {
-                    name: project_name.clone(),
-                    original_path: source.clone(),
-                    archived_path: dest.clone(),
-                    archived_at: now,
-                    size_bytes: bytes,
-                    project_type: macpurge::ProjectType::detect(&dest),
-                });
-
-                let _ = macpurge::save_archive_manifest(&archive_dir, &manifest);
-
-                let _ = app.emit(
-                    "archive-progress",
-                    ArchiveProgressPayload {
-                        project_name: project_name.clone(),
-                        status: "completed".to_string(),
-                        bytes_copied: bytes,
-                        total_bytes: bytes,
-                        error: None,
-                    },
-                );
-
-                archived.push(path_str.clone());
-            }
-            Err(e) => {
-                // Cleanup partial copy
-                let _ = std::fs::remove_dir_all(&dest);
-                let _ = app.emit(
-                    "archive-progress",
-                    ArchiveProgressPayload {
-                        project_name: project_name.clone(),
-                        status: "error".to_string(),
-                        bytes_copied: 0,
-                        total_bytes: 0,
-                        error: Some(e.to_string()),
-                    },
-                );
             }
         }
     }
@@ -239,7 +353,7 @@ pub async fn list_archived_projects() -> Result<Vec<macpurge::ArchivedProjectEnt
     Ok(existing)
 }
 
-/// Restore archived projects back to original location
+/// Restore archived projects back to original location (supports both zip and directory)
 #[tauri::command]
 pub async fn restore_projects(
     app: AppHandle,
@@ -278,6 +392,8 @@ pub async fn restore_projects(
 
         let dest = &entry.original_path;
         let project_name = entry.name.clone();
+        let is_zip = entry.archive_format.as_deref() == Some("zip")
+            || archived_path.extension().map_or(false, |ext| ext == "zip");
 
         // Check if original location already exists
         if dest.exists() {
@@ -304,34 +420,66 @@ pub async fn restore_projects(
             }
         }
 
-        // Emit: copying
-        let _ = app.emit(
-            "archive-progress",
-            ArchiveProgressPayload {
-                project_name: project_name.clone(),
-                status: "copying".to_string(),
-                bytes_copied: 0,
-                total_bytes: entry.size_bytes,
-                error: None,
-            },
-        );
+        if is_zip {
+            // Restore from zip archive
+            let _ = app.emit(
+                "archive-progress",
+                ArchiveProgressPayload {
+                    project_name: project_name.clone(),
+                    status: "extracting".to_string(),
+                    bytes_copied: 0,
+                    total_bytes: entry.size_bytes,
+                    error: None,
+                },
+            );
 
-        // Copy from archive to original location
-        match macpurge::copy_dir_recursive(&archived_path, dest) {
-            Ok(bytes) => {
-                // Delete archived copy
-                let _ = app.emit(
-                    "archive-progress",
-                    ArchiveProgressPayload {
-                        project_name: project_name.clone(),
-                        status: "deleting_source".to_string(),
-                        bytes_copied: bytes,
-                        total_bytes: bytes,
-                        error: None,
-                    },
-                );
+            match macpurge::extract_zip_to_dir(&archived_path, dest) {
+                Ok(bytes) => {
+                    let _ = app.emit(
+                        "archive-progress",
+                        ArchiveProgressPayload {
+                            project_name: project_name.clone(),
+                            status: "deleting_source".to_string(),
+                            bytes_copied: bytes,
+                            total_bytes: bytes,
+                            error: None,
+                        },
+                    );
 
-                if let Err(e) = std::fs::remove_dir_all(&archived_path) {
+                    if let Err(e) = std::fs::remove_file(&archived_path) {
+                        let _ = std::fs::remove_dir_all(dest);
+                        let _ = app.emit(
+                            "archive-progress",
+                            ArchiveProgressPayload {
+                                project_name: project_name.clone(),
+                                status: "error".to_string(),
+                                bytes_copied: 0,
+                                total_bytes: bytes,
+                                error: Some(format!("Failed to remove archive zip: {}", e)),
+                            },
+                        );
+                        continue;
+                    }
+
+                    manifest
+                        .entries
+                        .retain(|e| e.archived_path != archived_path);
+                    let _ = macpurge::save_archive_manifest(&archive_dir, &manifest);
+
+                    let _ = app.emit(
+                        "archive-progress",
+                        ArchiveProgressPayload {
+                            project_name: project_name.clone(),
+                            status: "completed".to_string(),
+                            bytes_copied: bytes,
+                            total_bytes: bytes,
+                            error: None,
+                        },
+                    );
+
+                    restored.push(archived_path_str.clone());
+                }
+                Err(e) => {
                     let _ = std::fs::remove_dir_all(dest);
                     let _ = app.emit(
                         "archive-progress",
@@ -339,44 +487,84 @@ pub async fn restore_projects(
                             project_name: project_name.clone(),
                             status: "error".to_string(),
                             bytes_copied: 0,
-                            total_bytes: bytes,
-                            error: Some(format!("Failed to remove archive copy: {}", e)),
+                            total_bytes: 0,
+                            error: Some(e.to_string()),
                         },
                     );
-                    continue;
                 }
-
-                // Remove from manifest
-                manifest
-                    .entries
-                    .retain(|e| e.archived_path != archived_path);
-                let _ = macpurge::save_archive_manifest(&archive_dir, &manifest);
-
-                let _ = app.emit(
-                    "archive-progress",
-                    ArchiveProgressPayload {
-                        project_name: project_name.clone(),
-                        status: "completed".to_string(),
-                        bytes_copied: bytes,
-                        total_bytes: bytes,
-                        error: None,
-                    },
-                );
-
-                restored.push(archived_path_str.clone());
             }
-            Err(e) => {
-                let _ = std::fs::remove_dir_all(dest);
-                let _ = app.emit(
-                    "archive-progress",
-                    ArchiveProgressPayload {
-                        project_name: project_name.clone(),
-                        status: "error".to_string(),
-                        bytes_copied: 0,
-                        total_bytes: 0,
-                        error: Some(e.to_string()),
-                    },
-                );
+        } else {
+            // Restore from directory (legacy)
+            let _ = app.emit(
+                "archive-progress",
+                ArchiveProgressPayload {
+                    project_name: project_name.clone(),
+                    status: "copying".to_string(),
+                    bytes_copied: 0,
+                    total_bytes: entry.size_bytes,
+                    error: None,
+                },
+            );
+
+            match macpurge::copy_dir_recursive(&archived_path, dest) {
+                Ok(bytes) => {
+                    let _ = app.emit(
+                        "archive-progress",
+                        ArchiveProgressPayload {
+                            project_name: project_name.clone(),
+                            status: "deleting_source".to_string(),
+                            bytes_copied: bytes,
+                            total_bytes: bytes,
+                            error: None,
+                        },
+                    );
+
+                    if let Err(e) = std::fs::remove_dir_all(&archived_path) {
+                        let _ = std::fs::remove_dir_all(dest);
+                        let _ = app.emit(
+                            "archive-progress",
+                            ArchiveProgressPayload {
+                                project_name: project_name.clone(),
+                                status: "error".to_string(),
+                                bytes_copied: 0,
+                                total_bytes: bytes,
+                                error: Some(format!("Failed to remove archive copy: {}", e)),
+                            },
+                        );
+                        continue;
+                    }
+
+                    manifest
+                        .entries
+                        .retain(|e| e.archived_path != archived_path);
+                    let _ = macpurge::save_archive_manifest(&archive_dir, &manifest);
+
+                    let _ = app.emit(
+                        "archive-progress",
+                        ArchiveProgressPayload {
+                            project_name: project_name.clone(),
+                            status: "completed".to_string(),
+                            bytes_copied: bytes,
+                            total_bytes: bytes,
+                            error: None,
+                        },
+                    );
+
+                    restored.push(archived_path_str.clone());
+                }
+                Err(e) => {
+                    let _ = std::fs::remove_dir_all(dest);
+                    let _ = app.emit(
+                        "archive-progress",
+                        ArchiveProgressPayload {
+                            project_name: project_name.clone(),
+                            status: "error".to_string(),
+                            bytes_copied: 0,
+                            total_bytes: 0,
+                            error: Some(e.to_string()),
+                        },
+                    );
+                }
             }
         }
     }
@@ -415,6 +603,41 @@ pub async fn get_archive_status() -> Result<ArchiveStatusResponse, String> {
         total_size,
         project_count,
     })
+}
+
+/// Get archive configuration
+#[tauri::command]
+pub async fn get_archive_config() -> Result<ArchiveConfigResponse, String> {
+    let config = macpurge::load_config().map_err(|e| e.to_string())?;
+    Ok(ArchiveConfigResponse {
+        scan_batch_size: config.archive.scan_batch_size,
+        clean_artifacts_before_archive: config.archive.clean_artifacts_before_archive,
+        compress_to_zip: config.archive.compress_to_zip,
+    })
+}
+
+/// Save archive configuration
+#[tauri::command]
+pub async fn save_archive_config(archive_config: ArchiveConfigInput) -> Result<(), String> {
+    let mut config = macpurge::load_config().map_err(|e| e.to_string())?;
+    config.archive.scan_batch_size = archive_config.scan_batch_size;
+    config.archive.clean_artifacts_before_archive = archive_config.clean_artifacts_before_archive;
+    config.archive.compress_to_zip = archive_config.compress_to_zip;
+    macpurge::save_config(&config).map_err(|e| e.to_string())
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct ArchiveConfigResponse {
+    pub scan_batch_size: usize,
+    pub clean_artifacts_before_archive: bool,
+    pub compress_to_zip: bool,
+}
+
+#[derive(Clone, serde::Deserialize)]
+pub struct ArchiveConfigInput {
+    pub scan_batch_size: usize,
+    pub clean_artifacts_before_archive: bool,
+    pub compress_to_zip: bool,
 }
 
 // ── Git status & actions ────────────────────────

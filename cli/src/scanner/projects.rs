@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::{Read as IoRead, Write as IoWrite};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::UNIX_EPOCH;
@@ -158,6 +159,9 @@ pub struct ArchivedProjectEntry {
     pub archived_at: i64,
     pub size_bytes: u64,
     pub project_type: ProjectType,
+    /// Archive format: "zip" or "directory". None = legacy (directory).
+    #[serde(default)]
+    pub archive_format: Option<String>,
 }
 
 /// The manifest file stored in the archive directory
@@ -602,6 +606,110 @@ fn get_dir_mtime(path: &Path) -> Option<i64> {
     }
 
     latest
+}
+
+/// Compress a directory into a .zip file, returns total bytes written
+pub fn compress_dir_to_zip(source: &Path, dest_zip: &Path) -> anyhow::Result<u64> {
+    let file = fs::File::create(dest_zip)?;
+    let mut zip_writer = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+
+    for entry in walkdir::WalkDir::new(source).min_depth(1) {
+        let entry = entry?;
+        let path = entry.path();
+        let relative = path.strip_prefix(source)?;
+        let name = relative.to_string_lossy();
+
+        if entry.file_type().is_dir() {
+            zip_writer.add_directory(format!("{}/", name), options)?;
+        } else if entry.file_type().is_file() {
+            zip_writer.start_file(name.to_string(), options)?;
+            let mut f = fs::File::open(path)?;
+            let mut buffer = Vec::new();
+            f.read_to_end(&mut buffer)?;
+            zip_writer.write_all(&buffer)?;
+        }
+        // Symlinks are skipped in zip archives
+    }
+
+    zip_writer.finish()?;
+    // Return the size of the zip file itself
+    let zip_size = fs::metadata(dest_zip)?.len();
+    Ok(zip_size)
+}
+
+/// Extract a .zip file to a directory, returns total bytes extracted
+pub fn extract_zip_to_dir(zip_path: &Path, dest: &Path) -> anyhow::Result<u64> {
+    let file = fs::File::open(zip_path)?;
+    let mut archive = zip::ZipArchive::new(file)?;
+    let mut total_bytes: u64 = 0;
+
+    fs::create_dir_all(dest)?;
+
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)?;
+        let name = entry.name().to_string();
+        let outpath = dest.join(&name);
+
+        if entry.is_dir() {
+            fs::create_dir_all(&outpath)?;
+        } else {
+            if let Some(parent) = outpath.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let mut outfile = fs::File::create(&outpath)?;
+            let bytes = std::io::copy(&mut entry, &mut outfile)?;
+            total_bytes += bytes;
+
+            // Restore permissions on Unix
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Some(mode) = entry.unix_mode() {
+                    fs::set_permissions(&outpath, fs::Permissions::from_mode(mode))?;
+                }
+            }
+        }
+    }
+
+    Ok(total_bytes)
+}
+
+/// Remove known dev artifact directories from a project.
+/// Returns total bytes removed.
+pub fn clean_artifacts_from_project(project_path: &Path) -> u64 {
+    let project_type = ProjectType::detect(project_path);
+    let mut bytes_removed: u64 = 0;
+
+    for artifact_dir in project_type.artifact_dirs() {
+        let artifact_path = project_path.join(artifact_dir);
+        if artifact_path.exists() && artifact_path.is_dir() {
+            let (size, _) = calculate_dir_size(&artifact_path);
+            if fs::remove_dir_all(&artifact_path).is_ok() {
+                bytes_removed += size;
+            }
+        }
+    }
+
+    bytes_removed
+}
+
+/// Generate a unique .zip destination path by appending _2, _3, etc. if needed
+pub fn unique_zip_dest_path(archive_dir: &Path, name: &str) -> PathBuf {
+    let mut dest = archive_dir.join(format!("{}.zip", name));
+    if !dest.exists() {
+        return dest;
+    }
+
+    let mut counter = 2u32;
+    loop {
+        dest = archive_dir.join(format!("{}_{}.zip", name, counter));
+        if !dest.exists() {
+            return dest;
+        }
+        counter += 1;
+    }
 }
 
 #[cfg(test)]

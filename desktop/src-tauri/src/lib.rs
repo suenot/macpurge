@@ -86,6 +86,8 @@ pub fn run() {
             commands::projects::list_archived_projects,
             commands::projects::restore_projects,
             commands::projects::get_archive_status,
+            commands::projects::get_archive_config,
+            commands::projects::save_archive_config,
             // Git commands
             commands::projects::check_git_status,
             commands::projects::auto_commit_project,

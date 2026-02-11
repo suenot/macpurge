@@ -28,6 +28,10 @@ pub struct Config {
     /// Schedule settings for automated cleanup
     #[serde(default)]
     pub schedule: Option<ScheduleConfig>,
+
+    /// Archive settings
+    #[serde(default)]
+    pub archive: ArchiveConfig,
 }
 
 /// Scan-related configuration
@@ -113,6 +117,36 @@ impl Default for CleanupConfig {
 
 fn default_true() -> bool {
     true
+}
+
+/// Archive-related configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchiveConfig {
+    /// Number of projects to scan sizes for concurrently
+    #[serde(default = "default_scan_batch_size")]
+    pub scan_batch_size: usize,
+
+    /// Remove dev artifacts (node_modules, target, venv, etc.) before archiving
+    #[serde(default = "default_true")]
+    pub clean_artifacts_before_archive: bool,
+
+    /// Compress archived projects to .zip
+    #[serde(default = "default_true")]
+    pub compress_to_zip: bool,
+}
+
+impl Default for ArchiveConfig {
+    fn default() -> Self {
+        Self {
+            scan_batch_size: default_scan_batch_size(),
+            clean_artifacts_before_archive: true,
+            compress_to_zip: true,
+        }
+    }
+}
+
+fn default_scan_batch_size() -> usize {
+    3
 }
 
 /// Schedule configuration for automated cleanup

@@ -1,0 +1,9 @@
+{
+  "app_name": "MacClean",
+  "version": "1.0.0",
+  "settings": {
+    "debug": false,
+    "log_level": "info"
+  },
+  "features": ["scanning", "cleaning", "monitoring"]
+}

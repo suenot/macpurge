@@ -32,6 +32,7 @@ import {
   listArchivedProjects,
   restoreProjects,
   getArchiveStatus,
+  getArchiveConfig,
   onProjectSizeCalculated,
   onArchiveProgress,
   checkGitStatus,
@@ -46,6 +47,7 @@ import type {
   ArchivedProjectEntry,
   ArchiveProgressPayload,
   ArchiveStatusResponse,
+  ArchiveConfigResponse,
   GitStatus,
 } from '@/lib/types';
 import { formatBytes } from '@/lib/types';
@@ -100,6 +102,7 @@ export default function ProjectsPage() {
   const [gitStatuses, setGitStatuses] = useState<Map<string, GitStatus>>(new Map());
   const [gitStatusesLoaded, setGitStatusesLoaded] = useState(false);
   const [actionLoading, setActionLoading] = useState<Map<string, string>>(new Map());
+  const [archiveConfig, setArchiveConfig] = useState<ArchiveConfigResponse | null>(null);
 
   // Load projects
   const loadProjects = useCallback(async () => {
@@ -110,14 +113,16 @@ export default function ProjectsPage() {
     setGitStatuses(new Map());
 
     try {
-      const [projectList, archived, status] = await Promise.all([
+      const [projectList, archived, status, archCfg] = await Promise.all([
         listProjects(),
         listArchivedProjects(),
         getArchiveStatus(),
+        getArchiveConfig(),
       ]);
       setProjects(projectList);
       setArchivedProjects(archived);
       setArchiveStatus(status);
+      setArchiveConfig(archCfg);
     } catch (err) {
       setError(err as string);
     } finally {
@@ -131,7 +136,7 @@ export default function ProjectsPage() {
     loadProjects();
   }, [loadProjects]);
 
-  // Background size scanning
+  // Background size scanning (batched)
   useEffect(() => {
     if (projects.length === 0 || sizesLoaded) return;
 
@@ -153,11 +158,15 @@ export default function ProjectsPage() {
         ));
       });
 
-      // Fire off size calculations
-      for (const project of projects) {
-        if (project.size_bytes === null) {
-          calculateProjectSize(project.path).catch(console.error);
-        }
+      // Fire off size calculations in batches
+      const pending = projects.filter(p => p.size_bytes === null);
+      const batchSize = archiveConfig?.scan_batch_size ?? 3;
+      for (let i = 0; i < pending.length; i += batchSize) {
+        if (!mounted) break;
+        const batch = pending.slice(i, i + batchSize);
+        await Promise.all(
+          batch.map(p => calculateProjectSize(p.path).catch(console.error))
+        );
       }
       setSizesLoaded(true);
     };
@@ -167,9 +176,9 @@ export default function ProjectsPage() {
       mounted = false;
       unlisten?.();
     };
-  }, [projects.length, sizesLoaded]);
+  }, [projects.length, sizesLoaded, archiveConfig]);
 
-  // Background git status scanning
+  // Background git status scanning (batched)
   useEffect(() => {
     const gitProjects = projects.filter(p => p.has_git);
     if (gitProjects.length === 0 || gitStatusesLoaded) return;
@@ -187,8 +196,13 @@ export default function ProjectsPage() {
         });
       });
 
-      for (const project of gitProjects) {
-        checkGitStatus(project.path).catch(console.error);
+      const batchSize = archiveConfig?.scan_batch_size ?? 3;
+      for (let i = 0; i < gitProjects.length; i += batchSize) {
+        if (!mounted) break;
+        const batch = gitProjects.slice(i, i + batchSize);
+        await Promise.all(
+          batch.map(p => checkGitStatus(p.path).catch(console.error))
+        );
       }
       setGitStatusesLoaded(true);
     };

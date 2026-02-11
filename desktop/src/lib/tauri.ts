@@ -34,6 +34,8 @@ import type {
   ProjectSizePayload,
   ArchiveProgressPayload,
   ArchiveStatusResponse,
+  ArchiveConfigResponse,
+  ArchiveConfigInput,
   GitStatusPayload,
   PushRemoteResult,
 } from './types';
@@ -260,6 +262,14 @@ export async function restoreProjects(archivedPaths: string[]): Promise<string[]
 
 export async function getArchiveStatus(): Promise<ArchiveStatusResponse> {
   return invoke<ArchiveStatusResponse>('get_archive_status');
+}
+
+export async function getArchiveConfig(): Promise<ArchiveConfigResponse> {
+  return invoke<ArchiveConfigResponse>('get_archive_config');
+}
+
+export async function saveArchiveConfig(archiveConfig: ArchiveConfigInput): Promise<void> {
+  return invoke('save_archive_config', { archiveConfig });
 }
 
 // Project event listeners
