@@ -22,28 +22,39 @@ import {
   ArrowUp,
   GitCommitHorizontal,
   Upload,
+  FolderOpen,
+  Trash2,
+  ChevronRight,
+  ChevronDown,
+  Folder,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import Link from 'next/link';
 import {
-  listProjects,
+  listProjectsTree,
   calculateProjectSize,
+  calculateGroupSize,
   archiveProjects,
   listArchivedProjects,
   restoreProjects,
   getArchiveStatus,
   getArchiveConfig,
   onProjectSizeCalculated,
+  onGroupSizeCalculated,
   onArchiveProgress,
   checkGitStatus,
   autoCommitProject,
   pushProjectAll,
   onProjectGitStatus,
+  deleteProject,
+  openProjectInFinder,
   isTauri,
 } from '@/lib/tauri';
 import type {
   ProjectInfo,
   ProjectType,
+  ProjectTreeEntry,
+  ProjectTreeGroup,
   ArchivedProjectEntry,
   ArchiveProgressPayload,
   ArchiveStatusResponse,
@@ -84,8 +95,24 @@ function relativeTime(timestamp: number | null): string {
   return `${Math.floor(diff / 31536000)}y ago`;
 }
 
+// Helpers to extract fields from tree entries
+function getEntryPath(e: ProjectTreeEntry): string {
+  return e.path;
+}
+function getEntryName(e: ProjectTreeEntry): string {
+  return e.name;
+}
+function getEntryLastModified(e: ProjectTreeEntry): number {
+  if (e.kind === 'Project') return e.last_commit_time ?? e.last_modified ?? 0;
+  return e.last_modified ?? 0;
+}
+function getEntrySize(e: ProjectTreeEntry): number {
+  if (e.kind === 'Project') return e.size_bytes ?? 0;
+  return e.size_bytes ?? 0;
+}
+
 export default function ProjectsPage() {
-  const [projects, setProjects] = useState<ProjectInfo[]>([]);
+  const [treeEntries, setTreeEntries] = useState<ProjectTreeEntry[]>([]);
   const [archivedProjects, setArchivedProjects] = useState<ArchivedProjectEntry[]>([]);
   const [archiveStatus, setArchiveStatus] = useState<ArchiveStatusResponse | null>(null);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
@@ -103,6 +130,25 @@ export default function ProjectsPage() {
   const [gitStatusesLoaded, setGitStatusesLoaded] = useState(false);
   const [actionLoading, setActionLoading] = useState<Map<string, string>>(new Map());
   const [archiveConfig, setArchiveConfig] = useState<ArchiveConfigResponse | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+  // Derive flat list of all projects (for size/git scanning)
+  const allProjects = useMemo(() => {
+    return treeEntries.flatMap(entry =>
+      entry.kind === 'Project' ? [entry as unknown as ProjectInfo] : entry.children
+    );
+  }, [treeEntries]);
+
+  // Total top-level entry count
+  const totalProjectCount = useMemo(() => {
+    let count = 0;
+    for (const entry of treeEntries) {
+      if (entry.kind === 'Project') count += 1;
+      else count += entry.children.length;
+    }
+    return count;
+  }, [treeEntries]);
 
   // Load projects
   const loadProjects = useCallback(async () => {
@@ -113,13 +159,13 @@ export default function ProjectsPage() {
     setGitStatuses(new Map());
 
     try {
-      const [projectList, archived, status, archCfg] = await Promise.all([
-        listProjects(),
+      const [tree, archived, status, archCfg] = await Promise.all([
+        listProjectsTree(),
         listArchivedProjects(),
         getArchiveStatus(),
         getArchiveConfig(),
       ]);
-      setProjects(projectList);
+      setTreeEntries(tree);
       setArchivedProjects(archived);
       setArchiveStatus(status);
       setArchiveConfig(archCfg);
@@ -138,49 +184,103 @@ export default function ProjectsPage() {
 
   // Background size scanning (batched)
   useEffect(() => {
-    if (projects.length === 0 || sizesLoaded) return;
+    if (treeEntries.length === 0 || sizesLoaded) return;
 
-    let unlisten: (() => void) | undefined;
+    let unlistenProject: (() => void) | undefined;
+    let unlistenGroup: (() => void) | undefined;
     let mounted = true;
 
     const setup = async () => {
-      unlisten = await onProjectSizeCalculated((payload) => {
+      unlistenProject = await onProjectSizeCalculated((payload) => {
         if (!mounted) return;
-        setProjects(prev => prev.map(p =>
-          p.path === payload.path
-            ? {
-                ...p,
-                size_bytes: payload.size_bytes,
-                artifact_size: payload.artifact_size,
-                last_commit_time: payload.last_commit_time ?? p.last_commit_time,
-              }
-            : p
-        ));
+        // Update child projects inside groups AND standalone projects
+        setTreeEntries(prev => prev.map(entry => {
+          if (entry.kind === 'Project' && entry.path === payload.path) {
+            return {
+              ...entry,
+              size_bytes: payload.size_bytes,
+              artifact_size: payload.artifact_size,
+              last_commit_time: payload.last_commit_time ?? entry.last_commit_time,
+            };
+          }
+          if (entry.kind === 'Group') {
+            const updatedChildren = entry.children.map(c =>
+              c.path === payload.path
+                ? {
+                    ...c,
+                    size_bytes: payload.size_bytes,
+                    artifact_size: payload.artifact_size,
+                    last_commit_time: payload.last_commit_time ?? c.last_commit_time,
+                  }
+                : c
+            );
+            if (updatedChildren !== entry.children) {
+              return { ...entry, children: updatedChildren };
+            }
+          }
+          return entry;
+        }));
       });
 
-      // Fire off size calculations in batches
-      const pending = projects.filter(p => p.size_bytes === null);
+      unlistenGroup = await onGroupSizeCalculated((payload) => {
+        if (!mounted) return;
+        setTreeEntries(prev => prev.map(entry => {
+          if (entry.kind === 'Group' && entry.path === payload.path) {
+            return {
+              ...entry,
+              size_bytes: payload.size_bytes,
+              artifact_size: payload.artifact_size,
+            };
+          }
+          return entry;
+        }));
+      });
+
+      // Gather all items to scan
+      const standaloneProjects = treeEntries
+        .filter(e => e.kind === 'Project') as Array<ProjectTreeEntry & { kind: 'Project' }>;
+      const groups = treeEntries
+        .filter(e => e.kind === 'Group') as ProjectTreeGroup[];
+      const childProjects = groups.flatMap(g => g.children);
+
       const batchSize = archiveConfig?.scan_batch_size ?? 3;
-      for (let i = 0; i < pending.length; i += batchSize) {
+
+      // Batch scan: groups
+      for (let i = 0; i < groups.length; i += batchSize) {
         if (!mounted) break;
-        const batch = pending.slice(i, i + batchSize);
+        const batch = groups.slice(i, i + batchSize);
         await Promise.all(
-          batch.map(p => calculateProjectSize(p.path).catch(console.error))
+          batch.map(g => calculateGroupSize(g.path).catch(console.error))
         );
       }
+
+      // Batch scan: standalone projects + child projects
+      const allProjectPaths = [
+        ...standaloneProjects.map(p => p.path),
+        ...childProjects.map(p => p.path),
+      ];
+      for (let i = 0; i < allProjectPaths.length; i += batchSize) {
+        if (!mounted) break;
+        const batch = allProjectPaths.slice(i, i + batchSize);
+        await Promise.all(
+          batch.map(path => calculateProjectSize(path).catch(console.error))
+        );
+      }
+
       setSizesLoaded(true);
     };
 
     setup();
     return () => {
       mounted = false;
-      unlisten?.();
+      unlistenProject?.();
+      unlistenGroup?.();
     };
-  }, [projects.length, sizesLoaded, archiveConfig]);
+  }, [treeEntries.length, sizesLoaded, archiveConfig]);
 
   // Background git status scanning (batched)
   useEffect(() => {
-    const gitProjects = projects.filter(p => p.has_git);
+    const gitProjects = allProjects.filter(p => p.has_git);
     if (gitProjects.length === 0 || gitStatusesLoaded) return;
 
     let unlisten: (() => void) | undefined;
@@ -212,7 +312,7 @@ export default function ProjectsPage() {
       mounted = false;
       unlisten?.();
     };
-  }, [projects.length, gitStatusesLoaded]);
+  }, [allProjects.length, gitStatusesLoaded]);
 
   // Archive progress events
   useEffect(() => {
@@ -238,18 +338,40 @@ export default function ProjectsPage() {
   }, []);
 
   // Sorting
-  const sortedProjects = useMemo(() => {
-    const filtered = filterType === 'all'
-      ? projects
-      : projects.filter(p => p.project_type === filterType);
+  const sortedTreeEntries = useMemo(() => {
+    let filtered = treeEntries;
+
+    if (filterType !== 'all') {
+      filtered = treeEntries.filter(entry => {
+        if (entry.kind === 'Project') return entry.project_type === filterType;
+        // Show group if any child matches
+        return entry.children.some(c => c.project_type === filterType);
+      });
+    }
 
     return [...filtered].sort((a, b) => {
       const dir = sortAsc ? 1 : -1;
       switch (sortBy) {
+        case 'last_modified':
+          return (getEntryLastModified(b) - getEntryLastModified(a)) * dir;
+        case 'size':
+          return (getEntrySize(b) - getEntrySize(a)) * dir;
+        case 'name':
+          return getEntryName(a).localeCompare(getEntryName(b)) * dir;
+      }
+    });
+  }, [treeEntries, sortBy, sortAsc, filterType]);
+
+  // Sort a list of child projects with the same field/direction as the top level,
+  // so sorting applies inside expanded groups too — not only at the top level.
+  const sortChildren = useCallback((children: ProjectInfo[]): ProjectInfo[] => {
+    const dir = sortAsc ? 1 : -1;
+    return [...children].sort((a, b) => {
+      switch (sortBy) {
         case 'last_modified': {
-          const aTime = a.last_commit_time ?? a.last_modified ?? 0;
-          const bTime = b.last_commit_time ?? b.last_modified ?? 0;
-          return (bTime - aTime) * dir;
+          const ta = a.last_commit_time ?? a.last_modified ?? 0;
+          const tb = b.last_commit_time ?? b.last_modified ?? 0;
+          return (tb - ta) * dir;
         }
         case 'size':
           return ((b.size_bytes ?? 0) - (a.size_bytes ?? 0)) * dir;
@@ -257,7 +379,7 @@ export default function ProjectsPage() {
           return a.name.localeCompare(b.name) * dir;
       }
     });
-  }, [projects, sortBy, sortAsc, filterType]);
+  }, [sortBy, sortAsc]);
 
   // Selection helpers
   const toggleSelect = (path: string) => {
@@ -271,7 +393,7 @@ export default function ProjectsPage() {
 
   const selectAll = () => {
     if (tab === 'active') {
-      setSelectedPaths(new Set(sortedProjects.map(p => p.path)));
+      setSelectedPaths(new Set(sortedTreeEntries.map(e => getEntryPath(e))));
     } else {
       setSelectedPaths(new Set(archivedProjects.map(p => p.archived_path)));
     }
@@ -281,15 +403,26 @@ export default function ProjectsPage() {
 
   const selectedSize = useMemo(() => {
     if (tab === 'active') {
-      return projects
-        .filter(p => selectedPaths.has(p.path))
-        .reduce((sum, p) => sum + (p.size_bytes ?? 0), 0);
+      return treeEntries
+        .filter(e => selectedPaths.has(getEntryPath(e)))
+        .reduce((sum, e) => sum + getEntrySize(e), 0);
     } else {
       return archivedProjects
         .filter(p => selectedPaths.has(p.archived_path))
         .reduce((sum, p) => sum + p.size_bytes, 0);
     }
-  }, [selectedPaths, projects, archivedProjects, tab]);
+  }, [selectedPaths, treeEntries, archivedProjects, tab]);
+
+  // Toggle expand group
+  const toggleExpand = (path: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setExpandedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
 
   // Archive handler
   const handleArchive = async () => {
@@ -337,7 +470,6 @@ export default function ProjectsPage() {
       const hash = await autoCommitProject(path);
       setSuccess(`Committed: ${hash}`);
       setTimeout(() => setSuccess(null), 3000);
-      // Refresh git status for this project
       checkGitStatus(path).catch(console.error);
     } catch (err) {
       setError(err as string);
@@ -376,11 +508,52 @@ export default function ProjectsPage() {
     }
   };
 
+  // Open project in Finder
+  const handleOpenInFinder = async (path: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await openProjectInFinder(path);
+    } catch (err) {
+      setError(err as string);
+    }
+  };
+
+  // Delete project
+  const handleDeleteProject = async (path: string) => {
+    setDeleteConfirm(null);
+    setActionLoading(prev => new Map(prev).set(path, 'delete'));
+    setError(null);
+
+    try {
+      await deleteProject(path);
+      setTreeEntries(prev => prev.filter(e => getEntryPath(e) !== path));
+      setSelectedPaths(prev => {
+        const next = new Set(prev);
+        next.delete(path);
+        return next;
+      });
+      setSuccess('Deleted successfully');
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      setError(err as string);
+    } finally {
+      setActionLoading(prev => {
+        const next = new Map(prev);
+        next.delete(path);
+        return next;
+      });
+    }
+  };
+
   // Available project types for filter
   const availableTypes = useMemo(() => {
-    const types = new Set(projects.map(p => p.project_type));
+    const types = new Set<ProjectType>();
+    for (const entry of treeEntries) {
+      if (entry.kind === 'Project') types.add(entry.project_type);
+      else entry.children.forEach(c => types.add(c.project_type));
+    }
     return Array.from(types).sort();
-  }, [projects]);
+  }, [treeEntries]);
 
   const handleSort = (field: SortField) => {
     if (sortBy === field) {
@@ -389,6 +562,130 @@ export default function ProjectsPage() {
       setSortBy(field);
       setSortAsc(false);
     }
+  };
+
+  // Render a project row (used for both standalone and group children)
+  const renderProjectRow = (project: ProjectInfo, indent: boolean = false) => {
+    const typeConf = projectTypeConfig[project.project_type];
+    const displayTime = project.last_commit_time ?? project.last_modified;
+    const gitStatus = gitStatuses.get(project.path);
+    const isCommitting = actionLoading.get(project.path) === 'commit';
+    const isPushing = actionLoading.get(project.path) === 'push';
+    const totalAhead = gitStatus?.remotes.reduce((s, r) => s + r.ahead, 0) ?? 0;
+
+    return (
+      <div
+        key={project.path}
+        className={clsx(
+          'flex items-center gap-3 py-2.5 rounded-xl transition-all group',
+          indent ? 'px-4 pl-12 bg-white/[0.02] hover:bg-white/[0.05]' : 'px-4'
+        )}
+      >
+        {/* Indent spacer for children (no checkbox) */}
+        {indent && <div className="w-4 flex-shrink-0" />}
+
+        {/* Project info */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className={clsx('font-medium truncate', indent ? 'text-slate-300 text-sm' : 'text-white')}>{project.name}</span>
+            <span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full border font-medium', typeConf.color)}>
+              {typeConf.label}
+            </span>
+            {project.has_git && (
+              <GitBranch className="w-3 h-3 text-slate-500" />
+            )}
+            {gitStatus?.current_branch && (
+              <span className="text-[10px] text-slate-500 font-mono">
+                {gitStatus.current_branch}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2 mt-0.5">
+            <p className="text-xs text-slate-500 font-mono truncate">
+              {project.path}
+            </p>
+            {gitStatus && gitStatus.has_uncommitted && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 flex-shrink-0 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-yellow-400" />
+                {gitStatus.uncommitted_count} changes
+              </span>
+            )}
+            {gitStatus && totalAhead > 0 && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 flex-shrink-0 flex items-center gap-1">
+                <ArrowUp className="w-2.5 h-2.5" />
+                {totalAhead} unpushed
+              </span>
+            )}
+            {gitStatus && gitStatus.remotes.length > 1 && (
+              <span className="text-[10px] text-slate-600 flex-shrink-0">
+                {gitStatus.remotes.map(r => r.name).join(', ')}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Git action buttons */}
+        {gitStatus && (gitStatus.has_uncommitted || totalAhead > 0) && (
+          <div className="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+            {gitStatus.has_uncommitted && (
+              <button
+                onClick={(e) => handleAutoCommit(project.path, e)}
+                disabled={isCommitting}
+                className="px-2 py-1 rounded-lg text-[10px] font-medium bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 hover:bg-yellow-500/20 transition-all flex items-center gap-1"
+                title="Auto commit all changes"
+              >
+                {isCommitting ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <GitCommitHorizontal className="w-3 h-3" />
+                )}
+                Commit
+              </button>
+            )}
+            {totalAhead > 0 && (
+              <button
+                onClick={(e) => handlePushAll(project.path, e)}
+                disabled={isPushing}
+                className="px-2 py-1 rounded-lg text-[10px] font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20 transition-all flex items-center gap-1"
+                title={`Push to ${gitStatus.remotes.map(r => r.name).join(', ')}`}
+              >
+                {isPushing ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <Upload className="w-3 h-3" />
+                )}
+                Push All
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Artifact badge */}
+        {project.artifact_size != null && project.artifact_size > 0 && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 flex-shrink-0">
+            {formatBytes(project.artifact_size)} artifacts
+          </span>
+        )}
+
+        {/* Size */}
+        <div className="text-right flex-shrink-0 w-20">
+          {project.size_bytes != null ? (
+            <span className="text-sm font-medium text-slate-300">
+              {formatBytes(project.size_bytes)}
+            </span>
+          ) : (
+            <Loader2 className="w-3 h-3 text-slate-600 animate-spin ml-auto" />
+          )}
+        </div>
+
+        {/* Time */}
+        <div className="text-right flex-shrink-0 w-20">
+          <span className="text-xs text-slate-500">
+            {relativeTime(displayTime)}
+          </span>
+        </div>
+      </div>
+    );
   };
 
   if (!isTauri()) {
@@ -468,7 +765,7 @@ export default function ProjectsPage() {
                 : 'text-slate-400 hover:text-white hover:bg-white/5'
             )}
           >
-            Active ({projects.length})
+            Active ({totalProjectCount})
           </button>
           <button
             onClick={() => { setTab('archived'); setSelectedPaths(new Set()); }}
@@ -486,7 +783,6 @@ export default function ProjectsPage() {
         {/* Sort & Filter (active tab only) */}
         {tab === 'active' && (
           <div className="flex items-center gap-2">
-            {/* Sort buttons */}
             {(['last_modified', 'size', 'name'] as SortField[]).map(field => (
               <button
                 key={field}
@@ -549,6 +845,9 @@ export default function ProjectsPage() {
                 )}>
                   {prog.status === 'copying' ? 'Copying...' :
                    prog.status === 'deleting_source' ? 'Cleaning up...' :
+                   prog.status === 'cleaning_artifacts' ? 'Cleaning artifacts...' :
+                   prog.status === 'compressing' ? 'Compressing...' :
+                   prog.status === 'extracting' ? 'Extracting...' :
                    prog.status === 'completed' ? 'Done' :
                    prog.error ?? 'Error'}
                 </span>
@@ -566,7 +865,7 @@ export default function ProjectsPage() {
             <p className="text-slate-400">Scanning project directories...</p>
           </div>
         ) : tab === 'active' ? (
-          sortedProjects.length === 0 ? (
+          sortedTreeEntries.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20">
               <FolderGit2 className="w-12 h-12 text-slate-600 mb-4" />
               <p className="text-slate-400 mb-2">No projects found</p>
@@ -579,138 +878,318 @@ export default function ProjectsPage() {
               </Link>
             </div>
           ) : (
-            sortedProjects.map((project) => {
-              const typeConf = projectTypeConfig[project.project_type];
-              const isSelected = selectedPaths.has(project.path);
-              const displayTime = project.last_commit_time ?? project.last_modified;
-              const gitStatus = gitStatuses.get(project.path);
-              const isCommitting = actionLoading.get(project.path) === 'commit';
-              const isPushing = actionLoading.get(project.path) === 'push';
-              const totalAhead = gitStatus?.remotes.reduce((s, r) => s + r.ahead, 0) ?? 0;
+            sortedTreeEntries.map((entry) => {
+              const entryPath = getEntryPath(entry);
+              const isSelected = selectedPaths.has(entryPath);
+
+              if (entry.kind === 'Project') {
+                // Standalone project row
+                const project = entry as ProjectInfo & { kind: 'Project' };
+                const typeConf = projectTypeConfig[entry.project_type];
+                const displayTime = entry.last_commit_time ?? entry.last_modified;
+                const gitStatus = gitStatuses.get(entry.path);
+                const isCommitting = actionLoading.get(entry.path) === 'commit';
+                const isPushing = actionLoading.get(entry.path) === 'push';
+                const totalAhead = gitStatus?.remotes.reduce((s, r) => s + r.ahead, 0) ?? 0;
+
+                return (
+                  <motion.div
+                    key={entry.path}
+                    layout
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className={clsx(
+                      'flex items-center gap-3 px-4 py-3 rounded-xl transition-all group cursor-pointer',
+                      isSelected
+                        ? 'bg-brand-500/10 border border-brand-500/20'
+                        : 'bg-white/5 border border-transparent hover:bg-white/10 hover:border-white/5'
+                    )}
+                    onClick={() => toggleSelect(entry.path)}
+                  >
+                    {/* Checkbox */}
+                    <button className="flex-shrink-0 text-slate-500 hover:text-brand-400 transition-colors">
+                      {isSelected
+                        ? <CheckSquare className="w-4 h-4 text-brand-400" />
+                        : <Square className="w-4 h-4" />}
+                    </button>
+
+                    {/* Project info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-white truncate">{entry.name}</span>
+                        <span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full border font-medium', typeConf.color)}>
+                          {typeConf.label}
+                        </span>
+                        {entry.has_git && (
+                          <GitBranch className="w-3 h-3 text-slate-500" />
+                        )}
+                        {gitStatus?.current_branch && (
+                          <span className="text-[10px] text-slate-500 font-mono">
+                            {gitStatus.current_branch}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <p className="text-xs text-slate-500 font-mono truncate">
+                          {entry.path}
+                        </p>
+                        {gitStatus && gitStatus.has_uncommitted && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 flex-shrink-0 flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-yellow-400" />
+                            {gitStatus.uncommitted_count} changes
+                          </span>
+                        )}
+                        {gitStatus && totalAhead > 0 && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 flex-shrink-0 flex items-center gap-1">
+                            <ArrowUp className="w-2.5 h-2.5" />
+                            {totalAhead} unpushed
+                          </span>
+                        )}
+                        {gitStatus && gitStatus.remotes.length > 1 && (
+                          <span className="text-[10px] text-slate-600 flex-shrink-0">
+                            {gitStatus.remotes.map(r => r.name).join(', ')}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Git action buttons */}
+                    {gitStatus && (gitStatus.has_uncommitted || totalAhead > 0) && (
+                      <div className="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                        {gitStatus.has_uncommitted && (
+                          <button
+                            onClick={(e) => handleAutoCommit(entry.path, e)}
+                            disabled={isCommitting}
+                            className="px-2 py-1 rounded-lg text-[10px] font-medium bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 hover:bg-yellow-500/20 transition-all flex items-center gap-1"
+                            title="Auto commit all changes"
+                          >
+                            {isCommitting ? <Loader2 className="w-3 h-3 animate-spin" /> : <GitCommitHorizontal className="w-3 h-3" />}
+                            Commit
+                          </button>
+                        )}
+                        {totalAhead > 0 && (
+                          <button
+                            onClick={(e) => handlePushAll(entry.path, e)}
+                            disabled={isPushing}
+                            className="px-2 py-1 rounded-lg text-[10px] font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20 transition-all flex items-center gap-1"
+                            title={`Push to ${gitStatus.remotes.map(r => r.name).join(', ')}`}
+                          >
+                            {isPushing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />}
+                            Push All
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Open / Delete buttons */}
+                    <div className="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={(e) => handleOpenInFinder(entry.path, e)}
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-all"
+                        title="Open in Finder"
+                      >
+                        <FolderOpen className="w-3.5 h-3.5" />
+                      </button>
+                      {deleteConfirm === entry.path ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleDeleteProject(entry.path); }}
+                            className="px-2 py-1 rounded-lg text-[10px] font-medium bg-danger-500/20 text-danger-400 border border-danger-500/30 hover:bg-danger-500/30 transition-all"
+                          >
+                            Confirm
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setDeleteConfirm(null); }}
+                            className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-all"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setDeleteConfirm(entry.path); }}
+                          disabled={actionLoading.get(entry.path) === 'delete'}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-danger-400 hover:bg-danger-500/10 transition-all"
+                          title="Delete project"
+                        >
+                          {actionLoading.get(entry.path) === 'delete' ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Trash2 className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Artifact badge */}
+                    {entry.artifact_size != null && entry.artifact_size > 0 && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 flex-shrink-0">
+                        {formatBytes(entry.artifact_size)} artifacts
+                      </span>
+                    )}
+
+                    {/* Size */}
+                    <div className="text-right flex-shrink-0 w-20">
+                      {entry.size_bytes != null ? (
+                        <span className="text-sm font-medium text-slate-300">
+                          {formatBytes(entry.size_bytes)}
+                        </span>
+                      ) : (
+                        <Loader2 className="w-3 h-3 text-slate-600 animate-spin ml-auto" />
+                      )}
+                    </div>
+
+                    {/* Time */}
+                    <div className="text-right flex-shrink-0 w-20">
+                      <span className="text-xs text-slate-500">
+                        {relativeTime(displayTime)}
+                      </span>
+                    </div>
+                  </motion.div>
+                );
+              }
+
+              // Group row
+              const group = entry;
+              const isExpanded = expandedGroups.has(group.path);
+              const childTypes = [...new Set(group.children.map(c => c.project_type))];
 
               return (
-                <motion.div
-                  key={project.path}
-                  layout
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className={clsx(
-                    'flex items-center gap-3 px-4 py-3 rounded-xl transition-all group cursor-pointer',
-                    isSelected
-                      ? 'bg-brand-500/10 border border-brand-500/20'
-                      : 'bg-white/5 border border-transparent hover:bg-white/10 hover:border-white/5'
-                  )}
-                  onClick={() => toggleSelect(project.path)}
-                >
-                  {/* Checkbox */}
-                  <button className="flex-shrink-0 text-slate-500 hover:text-brand-400 transition-colors">
-                    {isSelected
-                      ? <CheckSquare className="w-4 h-4 text-brand-400" />
-                      : <Square className="w-4 h-4" />}
-                  </button>
-
-                  {/* Project info */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-white truncate">{project.name}</span>
-                      <span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full border font-medium', typeConf.color)}>
-                        {typeConf.label}
-                      </span>
-                      {project.has_git && (
-                        <GitBranch className="w-3 h-3 text-slate-500" />
-                      )}
-                      {gitStatus?.current_branch && (
-                        <span className="text-[10px] text-slate-500 font-mono">
-                          {gitStatus.current_branch}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <p className="text-xs text-slate-500 font-mono truncate">
-                        {project.path}
-                      </p>
-                      {/* Git status indicators */}
-                      {gitStatus && gitStatus.has_uncommitted && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 flex-shrink-0 flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-yellow-400" />
-                          {gitStatus.uncommitted_count} changes
-                        </span>
-                      )}
-                      {gitStatus && totalAhead > 0 && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 flex-shrink-0 flex items-center gap-1">
-                          <ArrowUp className="w-2.5 h-2.5" />
-                          {totalAhead} unpushed
-                        </span>
-                      )}
-                      {gitStatus && gitStatus.remotes.length > 1 && (
-                        <span className="text-[10px] text-slate-600 flex-shrink-0">
-                          {gitStatus.remotes.map(r => r.name).join(', ')}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Git action buttons */}
-                  {gitStatus && (gitStatus.has_uncommitted || totalAhead > 0) && (
-                    <div className="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                      {gitStatus.has_uncommitted && (
-                        <button
-                          onClick={(e) => handleAutoCommit(project.path, e)}
-                          disabled={isCommitting}
-                          className="px-2 py-1 rounded-lg text-[10px] font-medium bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 hover:bg-yellow-500/20 transition-all flex items-center gap-1"
-                          title="Auto commit all changes"
-                        >
-                          {isCommitting ? (
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                          ) : (
-                            <GitCommitHorizontal className="w-3 h-3" />
-                          )}
-                          Commit
-                        </button>
-                      )}
-                      {totalAhead > 0 && (
-                        <button
-                          onClick={(e) => handlePushAll(project.path, e)}
-                          disabled={isPushing}
-                          className="px-2 py-1 rounded-lg text-[10px] font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20 transition-all flex items-center gap-1"
-                          title={`Push to ${gitStatus.remotes.map(r => r.name).join(', ')}`}
-                        >
-                          {isPushing ? (
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                          ) : (
-                            <Upload className="w-3 h-3" />
-                          )}
-                          Push All
-                        </button>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Artifact badge */}
-                  {project.artifact_size != null && project.artifact_size > 0 && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 flex-shrink-0">
-                      {formatBytes(project.artifact_size)} artifacts
-                    </span>
-                  )}
-
-                  {/* Size */}
-                  <div className="text-right flex-shrink-0 w-20">
-                    {project.size_bytes != null ? (
-                      <span className="text-sm font-medium text-slate-300">
-                        {formatBytes(project.size_bytes)}
-                      </span>
-                    ) : (
-                      <Loader2 className="w-3 h-3 text-slate-600 animate-spin ml-auto" />
+                <div key={group.path}>
+                  <motion.div
+                    layout
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className={clsx(
+                      'flex items-center gap-3 px-4 py-3 rounded-xl transition-all group cursor-pointer',
+                      isSelected
+                        ? 'bg-brand-500/10 border border-brand-500/20'
+                        : 'bg-white/5 border border-transparent hover:bg-white/10 hover:border-white/5'
                     )}
-                  </div>
+                    onClick={() => toggleSelect(group.path)}
+                  >
+                    {/* Checkbox */}
+                    <button className="flex-shrink-0 text-slate-500 hover:text-brand-400 transition-colors">
+                      {isSelected
+                        ? <CheckSquare className="w-4 h-4 text-brand-400" />
+                        : <Square className="w-4 h-4" />}
+                    </button>
 
-                  {/* Time */}
-                  <div className="text-right flex-shrink-0 w-20">
-                    <span className="text-xs text-slate-500">
-                      {relativeTime(displayTime)}
-                    </span>
-                  </div>
-                </motion.div>
+                    {/* Expand toggle */}
+                    <button
+                      onClick={(e) => toggleExpand(group.path, e)}
+                      className="flex-shrink-0 text-slate-500 hover:text-white transition-colors"
+                    >
+                      {isExpanded
+                        ? <ChevronDown className="w-4 h-4" />
+                        : <ChevronRight className="w-4 h-4" />}
+                    </button>
+
+                    {/* Group info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <Folder className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                        <span className="font-medium text-white truncate">{group.name}</span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-500/10 text-slate-400 border border-slate-500/20 font-medium">
+                          {group.children.length} projects
+                        </span>
+                        {/* Show type badges for children */}
+                        {childTypes.slice(0, 3).map(t => (
+                          <span key={t} className={clsx('text-[10px] px-1 py-0.5 rounded-full border font-medium', projectTypeConfig[t].color)}>
+                            {projectTypeConfig[t].label}
+                          </span>
+                        ))}
+                        {childTypes.length > 3 && (
+                          <span className="text-[10px] text-slate-500">+{childTypes.length - 3}</span>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-500 font-mono truncate mt-0.5">
+                        {group.path}
+                      </p>
+                    </div>
+
+                    {/* Open / Delete buttons */}
+                    <div className="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={(e) => handleOpenInFinder(group.path, e)}
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-all"
+                        title="Open in Finder"
+                      >
+                        <FolderOpen className="w-3.5 h-3.5" />
+                      </button>
+                      {deleteConfirm === group.path ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleDeleteProject(group.path); }}
+                            className="px-2 py-1 rounded-lg text-[10px] font-medium bg-danger-500/20 text-danger-400 border border-danger-500/30 hover:bg-danger-500/30 transition-all"
+                          >
+                            Confirm
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setDeleteConfirm(null); }}
+                            className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-all"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setDeleteConfirm(group.path); }}
+                          disabled={actionLoading.get(group.path) === 'delete'}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-danger-400 hover:bg-danger-500/10 transition-all"
+                          title="Delete group folder"
+                        >
+                          {actionLoading.get(group.path) === 'delete' ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Trash2 className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Artifact badge */}
+                    {group.artifact_size != null && group.artifact_size > 0 && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 flex-shrink-0">
+                        {formatBytes(group.artifact_size)} artifacts
+                      </span>
+                    )}
+
+                    {/* Size */}
+                    <div className="text-right flex-shrink-0 w-20">
+                      {group.size_bytes != null ? (
+                        <span className="text-sm font-medium text-slate-300">
+                          {formatBytes(group.size_bytes)}
+                        </span>
+                      ) : (
+                        <Loader2 className="w-3 h-3 text-slate-600 animate-spin ml-auto" />
+                      )}
+                    </div>
+
+                    {/* Time */}
+                    <div className="text-right flex-shrink-0 w-20">
+                      <span className="text-xs text-slate-500">
+                        {relativeTime(group.last_modified)}
+                      </span>
+                    </div>
+                  </motion.div>
+
+                  {/* Expanded children */}
+                  <AnimatePresence>
+                    {isExpanded && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="overflow-hidden"
+                      >
+                        {sortChildren(
+                          group.children.filter(c => filterType === 'all' || c.project_type === filterType)
+                        ).map(child => renderProjectRow(child, true))}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
               );
             })
           )

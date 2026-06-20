@@ -10,6 +10,7 @@ pub mod apps;
 pub mod packages;
 pub mod system;
 pub mod devtools;
+pub mod ai_models;
 pub mod recipes;
 pub mod schedule;
 pub mod projects;

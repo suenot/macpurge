@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { AppWindow, Search, Trash2, RefreshCw, Database } from 'lucide-react';
 import { clsx } from 'clsx';
-import { listApps, getAppSizes, isTauri } from '@/lib/tauri';
+import { listApps, getAppSizes, trashApp, isTauri } from '@/lib/tauri';
 import type { AppInfo } from '@/lib/types';
 import { formatBytes } from '@/lib/types';
 import { motion } from 'framer-motion';
@@ -14,6 +14,8 @@ export default function AppsPage() {
   const [search, setSearch] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loadingSizes, setLoadingSizes] = useState(false);
+  const [trashing, setTrashing] = useState<string | null>(null);
+  const [confirmApp, setConfirmApp] = useState<AppInfo | null>(null);
   const abortRef = useRef(false);
 
   const loadApps = async () => {
@@ -73,6 +75,26 @@ export default function AppsPage() {
     setLoadingSizes(false);
   };
 
+  // Native window.confirm() is a no-op inside the Tauri WKWebview, so we use an
+  // in-app modal instead. Clicking the trash icon opens the modal; the modal's
+  // confirm button runs the actual delete.
+  const confirmTrash = async () => {
+    const app = confirmApp;
+    if (!app || !isTauri()) return;
+
+    setConfirmApp(null);
+    setTrashing(app.path);
+    setError(null);
+    try {
+      await trashApp(app.path);
+      setApps((prev) => prev.filter((a) => a.path !== app.path));
+    } catch (err) {
+      setError(`Failed to trash ${app.name}: ${err}`);
+    } finally {
+      setTrashing(null);
+    }
+  };
+
   useEffect(() => {
     loadApps();
     return () => { abortRef.current = true; };
@@ -124,6 +146,12 @@ export default function AppsPage() {
             className="w-full pl-10 pr-4 py-3 rounded-xl border border-white/10 bg-black/20 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:bg-black/30 transition-all"
           />
         </div>
+
+        {error && (
+          <div className="mb-2 px-4 py-2 rounded-xl border border-danger-500/30 bg-danger-500/10 text-sm text-danger-300">
+            {error}
+          </div>
+        )}
       </div>
 
       {/* Apps List */}
@@ -182,8 +210,17 @@ export default function AppsPage() {
                   )}
                 </div>
 
-                <button className="p-2 text-slate-600 hover:text-danger-400 hover:bg-danger-500/10 rounded-lg transition-all opacity-0 group-hover:opacity-100 focus:opacity-100">
-                  <Trash2 className="w-4 h-4" />
+                <button
+                  onClick={() => setConfirmApp(app)}
+                  disabled={trashing !== null}
+                  title={`Move ${app.name} to Trash`}
+                  className="p-2 text-slate-600 hover:text-danger-400 hover:bg-danger-500/10 rounded-lg transition-all opacity-0 group-hover:opacity-100 focus:opacity-100 disabled:opacity-50"
+                >
+                  {trashing === app.path ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-4 h-4" />
+                  )}
                 </button>
               </motion.div>
             ))}
@@ -197,6 +234,49 @@ export default function AppsPage() {
           <p className="text-xs text-slate-500 font-mono">
             {filteredApps.length} apps found • Using {formatBytes(filteredApps.reduce((acc, a) => acc + a.total_size_bytes, 0))}
           </p>
+        </div>
+      )}
+
+      {/* Trash confirmation modal */}
+      {confirmApp && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          onClick={() => setConfirmApp(null)}
+        >
+          <div
+            className="glass-card w-full max-w-md mx-4 rounded-2xl border border-white/10 p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-lg bg-danger-500/10 border border-danger-500/20 flex items-center justify-center flex-shrink-0">
+                <Trash2 className="w-5 h-5 text-danger-400" />
+              </div>
+              <h2 className="text-lg font-bold text-white">Move to Trash?</h2>
+            </div>
+            <p className="text-sm text-slate-300">
+              Move <span className="font-semibold text-white">{confirmApp.name}</span> to the Trash?
+            </p>
+            <p className="text-xs text-slate-500 font-mono mt-1 break-all">{confirmApp.path}</p>
+            <p className="text-xs text-slate-400 mt-3">
+              The app bundle goes to the Trash and can be restored from there. Its data
+              and caches are left untouched.
+            </p>
+            <div className="flex items-center justify-end gap-3 mt-6">
+              <button
+                onClick={() => setConfirmApp(null)}
+                className="px-4 py-2 bg-white/5 hover:bg-white/10 text-white rounded-xl transition-all font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmTrash}
+                className="px-4 py-2 bg-danger-500/90 hover:bg-danger-500 text-white rounded-xl transition-all font-medium flex items-center gap-2"
+              >
+                <Trash2 className="w-4 h-4" />
+                Move to Trash
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

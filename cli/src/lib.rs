@@ -21,8 +21,10 @@ pub use scanner::{
     PkgManagerType,
     // DevTools scanner
     DevToolType, DevToolCachePath, DevToolInfo, DevToolScanResult, DevToolScanner,
+    // AI model scanner
+    AiToolType, AiModelPath, AiToolInfo, AiModelScanResult, AiModelScanner,
     // Project scanner
-    ProjectType, ProjectInfo, ProjectScanner,
+    ProjectType, ProjectInfo, ProjectScanner, ProjectTreeEntry,
     ArchivedProjectEntry, ArchiveManifest,
     GitRemoteStatus, GitStatus,
     load_archive_manifest, save_archive_manifest,
@@ -39,6 +41,8 @@ pub use cleaners::{
     SystemScanner, SystemScanResult, SystemCategoryInfo, SystemCategoryPath,
     // DevTools cleaner
     DevToolsCleaner, DevToolCleanType,
+    // AI model cleaner
+    AiModelCleaner, clean_ai_model,
     clean_all_dev_artifacts, clean_app_remnants, clean_browser_cache,
     clean_cargo_cache, clean_homebrew_cache, clean_node_modules, clean_npm_cache,
     clean_pip_cache, clean_python_venv, clean_rust_target, clean_user_cache,

@@ -16,7 +16,8 @@ import {
   Database,
   Clock,
   Shield,
-  FolderGit2
+  FolderGit2,
+  BrainCircuit
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useEffect, useState } from 'react';
@@ -32,6 +33,7 @@ const navItems = [
   { href: '/system', label: 'System', icon: Shield },
   { href: '/apps', label: 'Applications', icon: AppWindow },
   { href: '/devtools', label: 'Dev Tools', icon: Wrench },
+  { href: '/ai-models', label: 'AI Models', icon: BrainCircuit },
   { href: '/recipes', label: 'Recipes', icon: Sparkles },
   { href: '/schedule', label: 'Schedule', icon: Clock },
   { href: '/settings', label: 'Settings', icon: Settings },

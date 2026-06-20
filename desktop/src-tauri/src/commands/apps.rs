@@ -55,6 +55,28 @@ pub fn find_remnants() -> Result<Vec<AppRemnant>, String> {
     ApplicationScanner::find_remnants().map_err(|e| e.to_string())
 }
 
+/// Move an application bundle to the macOS Trash (reversible).
+///
+/// Takes the exact bundle path (e.g. `/Applications/Docker.app`) rather than a
+/// name, so there is no fuzzy/substring matching that could trash the wrong
+/// thing. Only `.app` bundles under an `Applications` directory are accepted.
+#[tauri::command]
+pub fn trash_app(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+
+    if !p.exists() {
+        return Err(format!("Path does not exist: {}", path));
+    }
+    if p.extension().and_then(|e| e.to_str()) != Some("app") {
+        return Err(format!("Refusing to trash non-.app path: {}", path));
+    }
+    if !path.contains("/Applications/") {
+        return Err(format!("Refusing to trash path outside Applications: {}", path));
+    }
+
+    trash::delete(p).map_err(|e| format!("Failed to move to Trash: {}", e))
+}
+
 fn format_size(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;

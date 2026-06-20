@@ -299,6 +299,31 @@ export interface DevToolScanResult {
   scan_duration_ms: number;
 }
 
+// ── AI model types ────────────────────────────
+
+export type AiToolType = 'ollama' | 'lm_studio' | 'hugging_face' | 'comfy_ui';
+
+export interface AiModelPath {
+  path: string;
+  size_bytes: number;
+  description: string;
+  category: string;
+  safe_to_clean: boolean;
+}
+
+export interface AiToolInfo {
+  tool: AiToolType;
+  is_installed: boolean;
+  models: AiModelPath[];
+  total_size: number;
+}
+
+export interface AiModelScanResult {
+  tools: AiToolInfo[];
+  total_size: number;
+  scan_duration_ms: number;
+}
+
 // ── Recipe types ──────────────────────────────
 
 export interface RecipeStep {
@@ -420,6 +445,38 @@ export interface ArchiveConfigInput {
   scan_batch_size: number;
   clean_artifacts_before_archive: boolean;
   compress_to_zip: boolean;
+}
+
+// ── Project tree types ────────────────────────
+
+export interface ProjectTreeProject {
+  kind: 'Project';
+  name: string;
+  path: string;
+  size_bytes: number | null;
+  last_modified: number | null;
+  project_type: ProjectType;
+  has_git: boolean;
+  last_commit_time: number | null;
+  artifact_size: number | null;
+}
+
+export interface ProjectTreeGroup {
+  kind: 'Group';
+  name: string;
+  path: string;
+  last_modified: number | null;
+  size_bytes: number | null;
+  artifact_size: number | null;
+  children: ProjectInfo[];
+}
+
+export type ProjectTreeEntry = ProjectTreeProject | ProjectTreeGroup;
+
+export interface GroupSizePayload {
+  path: string;
+  size_bytes: number;
+  artifact_size: number;
 }
 
 export interface ArchiveStatusResponse {

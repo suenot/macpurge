@@ -148,6 +148,17 @@ enum Commands {
         output: String,
     },
 
+    /// Scan AI/ML model artifacts (Ollama, LM Studio, Hugging Face, ComfyUI)
+    ScanAi {
+        /// Specific tool to scan (ollama, lmstudio, huggingface, comfyui)
+        #[arg(long)]
+        tool: Option<String>,
+
+        /// Output format (text, json)
+        #[arg(long, short, default_value = "text")]
+        output: String,
+    },
+
     /// Manage cleanup recipes
     Recipe {
         #[command(subcommand)]
@@ -569,6 +580,10 @@ fn main() -> Result<()> {
 
         Commands::ScanDevtools { tool, output } => {
             cmd_scan_devtools(tool, output)?;
+        }
+
+        Commands::ScanAi { tool, output } => {
+            cmd_scan_ai(tool, output)?;
         }
 
         Commands::Recipe { action } => {
@@ -1527,6 +1542,72 @@ fn cmd_scan_devtools(tool: Option<String>, output: String) -> Result<()> {
         println!("{}", "═".repeat(60).dimmed());
         println!(
             "{} Total dev tools data: {}",
+            "📊".cyan(),
+            result.total_size_human().green().bold()
+        );
+    }
+
+    Ok(())
+}
+
+fn cmd_scan_ai(tool: Option<String>, output: String) -> Result<()> {
+    let scanner = AiModelScanner::new();
+
+    if output == "text" {
+        println!("\n{} Scanning AI/ML model artifacts...\n", "🧠".cyan());
+    }
+
+    let result = if let Some(tool_name) = tool {
+        let tool_type = match tool_name.to_lowercase().as_str() {
+            "ollama" => AiToolType::Ollama,
+            "lmstudio" | "lm-studio" | "lm_studio" => AiToolType::LmStudio,
+            "huggingface" | "hf" => AiToolType::HuggingFace,
+            "comfyui" | "comfy" => AiToolType::ComfyUi,
+            _ => {
+                error(&format!("Unknown tool: {}", tool_name));
+                println!("Available: ollama, lmstudio, huggingface, comfyui");
+                return Ok(());
+            }
+        };
+        let info = scanner.scan_tool(tool_type)?;
+        AiModelScanResult {
+            total_size: info.total_size,
+            tools: vec![info],
+            scan_duration_ms: 0,
+        }
+    } else {
+        scanner.scan_all()?
+    };
+
+    if output == "json" {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        for tool in &result.tools {
+            let status = if tool.is_installed { "✓".green() } else { "✗".red() };
+            println!(
+                "{} {} — {}",
+                status,
+                tool.tool.name().cyan().bold(),
+                tool.total_size_human().yellow()
+            );
+
+            for model in &tool.models {
+                let safe = if model.safe_to_clean { "🗑️ " } else { "⚠️ " };
+                println!(
+                    "    {} {} {} {}",
+                    safe,
+                    model.size_human().yellow(),
+                    format!("[{}]", model.category).dimmed(),
+                    model.description
+                );
+                println!("       {}", model.path.display().to_string().dimmed());
+            }
+            println!();
+        }
+
+        println!("{}", "═".repeat(60).dimmed());
+        println!(
+            "{} Total AI model data: {}",
             "📊".cyan(),
             result.total_size_human().green().bold()
         );

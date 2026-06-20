@@ -132,6 +132,27 @@ pub struct ProjectInfo {
     pub artifact_size: Option<u64>,
 }
 
+/// A tree entry: either a standalone project or a group folder containing child projects.
+/// Uses serde tag for TypeScript discriminated union.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum ProjectTreeEntry {
+    /// A standalone project at depth-1
+    Project {
+        #[serde(flatten)]
+        info: ProjectInfo,
+    },
+    /// A non-project folder containing child projects
+    Group {
+        name: String,
+        path: PathBuf,
+        last_modified: Option<i64>,
+        size_bytes: Option<u64>,
+        artifact_size: Option<u64>,
+        children: Vec<ProjectInfo>,
+    },
+}
+
 /// Git remote status (ahead/behind per remote)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitRemoteStatus {
@@ -242,6 +263,104 @@ impl ProjectScanner {
         });
 
         projects
+    }
+
+    /// Scan project directories and return a tree structure.
+    /// Depth-1 projects become ProjectTreeEntry::Project.
+    /// Depth-1 non-project folders with project children become ProjectTreeEntry::Group.
+    /// Returns entries sorted by last_modified descending.
+    pub fn scan_projects_tree(project_dirs: &[PathBuf]) -> Vec<ProjectTreeEntry> {
+        let mut entries = Vec::new();
+
+        for dir in project_dirs {
+            if !dir.exists() || !dir.is_dir() {
+                continue;
+            }
+
+            let dir_entries = match fs::read_dir(dir) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            for entry in dir_entries.flatten() {
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+
+                let name = match path.file_name().and_then(|n| n.to_str()) {
+                    Some(n) if !n.starts_with('.') => n.to_string(),
+                    _ => continue,
+                };
+
+                let project_type = ProjectType::detect(&path);
+                let has_git = path.join(".git").exists();
+
+                if project_type != ProjectType::Unknown || has_git {
+                    // Depth-1: standalone project
+                    entries.push(ProjectTreeEntry::Project {
+                        info: make_project_info(name, path, project_type, has_git),
+                    });
+                } else {
+                    // Potential group folder - scan children
+                    let sub_entries = match fs::read_dir(&path) {
+                        Ok(e) => e,
+                        Err(_) => continue,
+                    };
+
+                    let mut children = Vec::new();
+                    for sub_entry in sub_entries.flatten() {
+                        let sub_path = sub_entry.path();
+                        if !sub_path.is_dir() {
+                            continue;
+                        }
+                        let sub_name = match sub_path.file_name().and_then(|n| n.to_str()) {
+                            Some(n) if !n.starts_with('.') => n.to_string(),
+                            _ => continue,
+                        };
+                        let sub_type = ProjectType::detect(&sub_path);
+                        let sub_git = sub_path.join(".git").exists();
+                        if sub_type != ProjectType::Unknown || sub_git {
+                            children.push(make_project_info(sub_name, sub_path, sub_type, sub_git));
+                        }
+                    }
+
+                    if !children.is_empty() {
+                        // Sort children by last_modified descending
+                        children.sort_by(|a, b| {
+                            b.last_modified.unwrap_or(0).cmp(&a.last_modified.unwrap_or(0))
+                        });
+                        let group_mtime = children.iter()
+                            .filter_map(|c| c.last_modified)
+                            .max();
+
+                        entries.push(ProjectTreeEntry::Group {
+                            name,
+                            path,
+                            last_modified: group_mtime,
+                            size_bytes: None,
+                            artifact_size: None,
+                            children,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Sort top-level entries by last_modified descending
+        entries.sort_by(|a, b| {
+            let a_time = match a {
+                ProjectTreeEntry::Project { info } => info.last_modified.unwrap_or(0),
+                ProjectTreeEntry::Group { last_modified, .. } => last_modified.unwrap_or(0),
+            };
+            let b_time = match b {
+                ProjectTreeEntry::Project { info } => info.last_modified.unwrap_or(0),
+                ProjectTreeEntry::Group { last_modified, .. } => last_modified.unwrap_or(0),
+            };
+            b_time.cmp(&a_time)
+        });
+
+        entries
     }
 
     /// Calculate size for a single project.

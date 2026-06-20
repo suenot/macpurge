@@ -53,6 +53,14 @@ The desktop app imports the CLI crate as a library (`macpurge = { path = "../../
 - Docker: images, volumes, build cache (sparse file detection with `blocks * 512`)
 - Virtual Machines
 
+### AI Models
+- Scans local LLM / diffusion model artifacts and reports per-model sizes
+- **Ollama**: the `~/.ollama/models` store (blobs are content-addressed, so cleaned as one unit)
+- **LM Studio**: per-model directories under `~/.lmstudio/models` (GGUF and MLX)
+- **Hugging Face cache**: each repo under `~/.cache/huggingface/hub` plus the Xet dedup block store — auto-categorized as `paroquant`, `vmlx`, `mlx`, `diffusers`, or generic `huggingface` (datasets and auth tokens are left untouched)
+- **ComfyUI**: model subfolders (checkpoints, vae, loras, diffusion_models, …) under `~/Documents/ComfyUI/models` and other common install roots
+- Per-model selection so you keep what you use and purge the rest
+
 ### Project Manager
 - Lists projects from configured directories with type detection (Node, Rust, Go, Python, Java, .NET, Ruby, PHP, Elixir, Haskell, Swift, Dart)
 - Background size calculation with event-based updates
@@ -104,6 +112,11 @@ macpurge scan-system
 # Dev tools (Xcode, Docker, etc.)
 macpurge scan-devtools
 macpurge scan-devtools --tool docker
+
+# AI models (Ollama, LM Studio, Hugging Face, ComfyUI)
+macpurge scan-ai
+macpurge scan-ai --tool huggingface
+macpurge scan-ai --output json
 
 # Application management
 macpurge apps list

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 use super::{CleanOptions, CleanResult};
-use crate::scanner::calculate_dir_size;
+use crate::scanner::{calculate_dir_size, calculate_dir_size_on_disk};
 
 /// Information about an installed application
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -179,8 +179,10 @@ impl ApplicationScanner {
                     let name = entry.file_name().to_string_lossy().to_string();
                     if matches(&name) {
                         let p = entry.path();
+                        // on-disk size: handles sparse files like Docker.raw, whose
+                        // apparent length is the VM's max virtual disk (can be ~1 TB)
                         let size = if p.is_dir() {
-                            calculate_dir_size(&p).0
+                            calculate_dir_size_on_disk(&p).0
                         } else {
                             fs::metadata(&p).map(|m| m.len()).unwrap_or(0)
                         };
@@ -199,7 +201,7 @@ impl ApplicationScanner {
                     if matches(&name) {
                         let p = entry.path();
                         let size = if p.is_dir() {
-                            calculate_dir_size(&p).0
+                            calculate_dir_size_on_disk(&p).0
                         } else {
                             fs::metadata(&p).map(|m| m.len()).unwrap_or(0)
                         };

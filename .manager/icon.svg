@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="14" fill="#fff"/>
+  <!-- broom handle -->
+  <line x1="44" y1="8" x2="20" y2="52" stroke="#e53935" stroke-width="5" stroke-linecap="round"/>
+  <!-- bristles -->
+  <path d="M12 54 Q16 42 24 44 Q20 54 12 54Z" fill="#e53935"/>
+  <!-- X on top (delete/purge) -->
+  <line x1="40" y1="6" x2="50" y2="16" stroke="#e53935" stroke-width="3" stroke-linecap="round"/>
+  <line x1="50" y1="6" x2="40" y2="16" stroke="#e53935" stroke-width="3" stroke-linecap="round"/>
+</svg>

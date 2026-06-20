@@ -3,12 +3,14 @@ pub mod system_cache;
 pub mod package_managers;
 pub mod applications;
 pub mod devtools;
+pub mod ai_models;
 
 pub use dev_artifacts::*;
 pub use system_cache::*;
 pub use package_managers::*;
 pub use applications::*;
 pub use devtools::*;
+pub use ai_models::*;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};

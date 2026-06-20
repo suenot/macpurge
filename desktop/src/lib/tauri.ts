@@ -24,6 +24,8 @@ import type {
   SystemScanResult,
   DevToolScanResult,
   DevToolInfo,
+  AiModelScanResult,
+  AiToolInfo,
   Recipe,
   RecipeRunResult,
   ScheduleStatus,
@@ -36,6 +38,8 @@ import type {
   ArchiveStatusResponse,
   ArchiveConfigResponse,
   ArchiveConfigInput,
+  ProjectTreeEntry,
+  GroupSizePayload,
   GitStatusPayload,
   PushRemoteResult,
 } from './types';
@@ -143,6 +147,10 @@ export async function getAppSizes(appName: string, bundleId: string | null): Pro
   return invoke('get_app_sizes', { appName, bundleId });
 }
 
+export async function trashApp(path: string): Promise<void> {
+  return invoke('trash_app', { path });
+}
+
 // Package manager commands
 export async function scanPackages(): Promise<PackageScanResult> {
   return invoke<PackageScanResult>('scan_packages');
@@ -209,6 +217,22 @@ export async function cleanDevtoolCache(
   return invoke<CleanResult>('clean_devtool_cache', { path, dryRun });
 }
 
+// AI model commands
+export async function scanAiModels(): Promise<AiModelScanResult> {
+  return invoke<AiModelScanResult>('scan_ai_models');
+}
+
+export async function scanAiTool(tool: string): Promise<AiToolInfo> {
+  return invoke<AiToolInfo>('scan_ai_tool', { tool });
+}
+
+export async function cleanAiModelPath(
+  path: string,
+  dryRun: boolean = false,
+): Promise<CleanResult> {
+  return invoke<CleanResult>('clean_ai_model_path', { path, dryRun });
+}
+
 // Recipe commands
 export async function listRecipes(): Promise<Recipe[]> {
   return invoke<Recipe[]>('list_recipes');
@@ -244,6 +268,14 @@ export async function listProjects(): Promise<ProjectInfo[]> {
   return invoke<ProjectInfo[]>('list_projects');
 }
 
+export async function listProjectsTree(): Promise<ProjectTreeEntry[]> {
+  return invoke<ProjectTreeEntry[]>('list_projects_tree');
+}
+
+export async function calculateGroupSize(path: string): Promise<void> {
+  return invoke('calculate_group_size', { path });
+}
+
 export async function calculateProjectSize(path: string): Promise<void> {
   return invoke('calculate_project_size', { path });
 }
@@ -272,9 +304,22 @@ export async function saveArchiveConfig(archiveConfig: ArchiveConfigInput): Prom
   return invoke('save_archive_config', { archiveConfig });
 }
 
+// Project management
+export async function deleteProject(path: string): Promise<void> {
+  return invoke('delete_project', { path });
+}
+
+export async function openProjectInFinder(path: string): Promise<void> {
+  return invoke('open_project_in_finder', { path });
+}
+
 // Project event listeners
 export function onProjectSizeCalculated(callback: (payload: ProjectSizePayload) => void): Promise<UnlistenFn> {
   return listen<ProjectSizePayload>('project-size-calculated', (event) => callback(event.payload));
+}
+
+export function onGroupSizeCalculated(callback: (payload: GroupSizePayload) => void): Promise<UnlistenFn> {
+  return listen<GroupSizePayload>('group-size-calculated', (event) => callback(event.payload));
 }
 
 export function onArchiveProgress(callback: (payload: ArchiveProgressPayload) => void): Promise<UnlistenFn> {

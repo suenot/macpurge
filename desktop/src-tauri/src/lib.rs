@@ -58,6 +58,7 @@ pub fn run() {
             commands::apps::find_app_files,
             commands::apps::find_remnants,
             commands::apps::get_app_sizes,
+            commands::apps::trash_app,
             // Package manager commands
             commands::packages::scan_packages,
             commands::packages::scan_package_manager,
@@ -70,6 +71,10 @@ pub fn run() {
             commands::devtools::scan_devtools,
             commands::devtools::scan_devtool,
             commands::devtools::clean_devtool_cache,
+            // AI model commands
+            commands::ai_models::scan_ai_models,
+            commands::ai_models::scan_ai_tool,
+            commands::ai_models::clean_ai_model_path,
             // Recipe commands
             commands::recipes::list_recipes,
             commands::recipes::run_recipe_cmd,
@@ -81,13 +86,18 @@ pub fn run() {
             commands::schedule::run_schedule_now,
             // Project commands
             commands::projects::list_projects,
+            commands::projects::list_projects_tree,
             commands::projects::calculate_project_size,
+            commands::projects::calculate_group_size,
             commands::projects::archive_projects,
             commands::projects::list_archived_projects,
             commands::projects::restore_projects,
             commands::projects::get_archive_status,
             commands::projects::get_archive_config,
             commands::projects::save_archive_config,
+            // Project management commands
+            commands::projects::delete_project,
+            commands::projects::open_project_in_finder,
             // Git commands
             commands::projects::check_git_status,
             commands::projects::auto_commit_project,

@@ -61,6 +61,64 @@ pub async fn list_projects() -> Result<Vec<macpurge::ProjectInfo>, String> {
     Ok(projects)
 }
 
+/// List all projects as a tree structure (groups + standalone projects)
+#[tauri::command]
+pub async fn list_projects_tree() -> Result<Vec<macpurge::ProjectTreeEntry>, String> {
+    let config = macpurge::load_config().map_err(|e| e.to_string())?;
+    let project_dirs = macpurge::get_project_dirs(&config);
+
+    if project_dirs.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let tree = macpurge::ProjectScanner::scan_projects_tree(&project_dirs);
+    Ok(tree)
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct GroupSizePayload {
+    pub path: String,
+    pub size_bytes: u64,
+    pub artifact_size: u64,
+}
+
+/// Calculate size for a project group folder and emit event
+#[tauri::command]
+pub async fn calculate_group_size(app: AppHandle, path: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    if !path_buf.exists() {
+        return Err("Path does not exist".to_string());
+    }
+
+    let (total_size, _) = macpurge::calculate_dir_size(&path_buf);
+
+    // Sum artifact sizes across child projects
+    let mut total_artifact_size: u64 = 0;
+    if let Ok(entries) = std::fs::read_dir(&path_buf) {
+        for entry in entries.flatten() {
+            let child_path = entry.path();
+            if child_path.is_dir() {
+                let project_type = macpurge::ProjectType::detect(&child_path);
+                for artifact_dir in project_type.artifact_dirs() {
+                    let artifact_path = child_path.join(artifact_dir);
+                    if artifact_path.exists() {
+                        let (size, _) = macpurge::calculate_dir_size(&artifact_path);
+                        total_artifact_size += size;
+                    }
+                }
+            }
+        }
+    }
+
+    let _ = app.emit("group-size-calculated", GroupSizePayload {
+        path,
+        size_bytes: total_size,
+        artifact_size: total_artifact_size,
+    });
+
+    Ok(())
+}
+
 /// Calculate size for a single project and emit event
 #[tauri::command]
 pub async fn calculate_project_size(app: AppHandle, path: String) -> Result<(), String> {
@@ -638,6 +696,36 @@ pub struct ArchiveConfigInput {
     pub scan_batch_size: usize,
     pub clean_artifacts_before_archive: bool,
     pub compress_to_zip: bool,
+}
+
+// ── Project management actions ───────────────────
+
+/// Delete a project directory permanently
+#[tauri::command]
+pub async fn delete_project(path: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    if !path_buf.exists() {
+        return Err("Path does not exist".to_string());
+    }
+    if !path_buf.is_dir() {
+        return Err("Path is not a directory".to_string());
+    }
+    std::fs::remove_dir_all(&path_buf)
+        .map_err(|e| format!("Failed to delete project: {}", e))
+}
+
+/// Open a project folder in Finder (macOS)
+#[tauri::command]
+pub async fn open_project_in_finder(path: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    if !path_buf.exists() {
+        return Err("Path does not exist".to_string());
+    }
+    std::process::Command::new("open")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| format!("Failed to open Finder: {}", e))?;
+    Ok(())
 }
 
 // ── Git status & actions ────────────────────────
