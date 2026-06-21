@@ -768,8 +768,31 @@ pub fn extract_zip_to_dir(zip_path: &Path, dest: &Path) -> anyhow::Result<u64> {
 
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
-        let name = entry.name().to_string();
-        let outpath = dest.join(&name);
+
+        // Guard against zip-slip path traversal: `enclosed_name()` returns `None`
+        // for entries that are absolute or escape the archive root via `..`.
+        // Skip any such malicious/corrupt entry instead of writing it.
+        let safe_name = match entry.enclosed_name() {
+            Some(name) => name,
+            None => {
+                eprintln!(
+                    "Warning: skipping unsafe zip entry '{}' (path traversal)",
+                    entry.name()
+                );
+                continue;
+            }
+        };
+        let outpath = dest.join(&safe_name);
+
+        // Belt-and-suspenders: ensure the joined path stays within `dest`.
+        // The target may not exist yet, so this is a lexical check.
+        if !outpath.starts_with(dest) {
+            eprintln!(
+                "Warning: skipping unsafe zip entry '{}' (escapes destination)",
+                entry.name()
+            );
+            continue;
+        }
 
         if entry.is_dir() {
             fs::create_dir_all(&outpath)?;
@@ -892,5 +915,127 @@ mod tests {
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].name, "my-app");
         assert_eq!(projects[0].project_type, ProjectType::Node);
+    }
+
+    /// Minimal CRC-32 (IEEE) for hand-crafting a valid zip in tests, since the
+    /// high-level `ZipWriter` normalizes "../" out of entry names and would
+    /// therefore not exercise the traversal guard.
+    fn crc32(data: &[u8]) -> u32 {
+        let mut crc: u32 = 0xFFFF_FFFF;
+        for &byte in data {
+            crc ^= byte as u32;
+            for _ in 0..8 {
+                let mask = (crc & 1).wrapping_neg();
+                crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+            }
+        }
+        !crc
+    }
+
+    /// Build a valid stored (uncompressed) zip containing a single entry with
+    /// the given (verbatim, possibly malicious) name and contents.
+    fn build_stored_zip(entry_name: &str, contents: &[u8]) -> Vec<u8> {
+        let name = entry_name.as_bytes();
+        let crc = crc32(contents);
+        let size = contents.len() as u32;
+
+        let mut buf = Vec::new();
+
+        // ---- Local file header ----
+        let local_header_offset = buf.len() as u32;
+        buf.extend_from_slice(&0x0403_4b50u32.to_le_bytes()); // signature
+        buf.extend_from_slice(&20u16.to_le_bytes()); // version needed
+        buf.extend_from_slice(&0u16.to_le_bytes()); // flags
+        buf.extend_from_slice(&0u16.to_le_bytes()); // method: stored
+        buf.extend_from_slice(&0u16.to_le_bytes()); // mod time
+        buf.extend_from_slice(&0u16.to_le_bytes()); // mod date
+        buf.extend_from_slice(&crc.to_le_bytes());
+        buf.extend_from_slice(&size.to_le_bytes()); // compressed size
+        buf.extend_from_slice(&size.to_le_bytes()); // uncompressed size
+        buf.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        buf.extend_from_slice(&0u16.to_le_bytes()); // extra len
+        buf.extend_from_slice(name);
+        buf.extend_from_slice(contents);
+
+        // ---- Central directory header ----
+        let central_dir_offset = buf.len() as u32;
+        buf.extend_from_slice(&0x0201_4b50u32.to_le_bytes()); // signature
+        buf.extend_from_slice(&20u16.to_le_bytes()); // version made by
+        buf.extend_from_slice(&20u16.to_le_bytes()); // version needed
+        buf.extend_from_slice(&0u16.to_le_bytes()); // flags
+        buf.extend_from_slice(&0u16.to_le_bytes()); // method: stored
+        buf.extend_from_slice(&0u16.to_le_bytes()); // mod time
+        buf.extend_from_slice(&0u16.to_le_bytes()); // mod date
+        buf.extend_from_slice(&crc.to_le_bytes());
+        buf.extend_from_slice(&size.to_le_bytes());
+        buf.extend_from_slice(&size.to_le_bytes());
+        buf.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        buf.extend_from_slice(&0u16.to_le_bytes()); // extra len
+        buf.extend_from_slice(&0u16.to_le_bytes()); // comment len
+        buf.extend_from_slice(&0u16.to_le_bytes()); // disk number start
+        buf.extend_from_slice(&0u16.to_le_bytes()); // internal attrs
+        buf.extend_from_slice(&0u32.to_le_bytes()); // external attrs
+        buf.extend_from_slice(&local_header_offset.to_le_bytes());
+        buf.extend_from_slice(name);
+
+        let central_dir_size = buf.len() as u32 - central_dir_offset;
+
+        // ---- End of central directory record ----
+        buf.extend_from_slice(&0x0605_4b50u32.to_le_bytes()); // signature
+        buf.extend_from_slice(&0u16.to_le_bytes()); // disk number
+        buf.extend_from_slice(&0u16.to_le_bytes()); // disk with cd
+        buf.extend_from_slice(&1u16.to_le_bytes()); // entries on disk
+        buf.extend_from_slice(&1u16.to_le_bytes()); // total entries
+        buf.extend_from_slice(&central_dir_size.to_le_bytes());
+        buf.extend_from_slice(&central_dir_offset.to_le_bytes());
+        buf.extend_from_slice(&0u16.to_le_bytes()); // comment len
+
+        buf
+    }
+
+    #[test]
+    fn test_extract_zip_extracts_legitimate_entry() {
+        let zip_dir = tempdir().unwrap();
+        let zip_path = zip_dir.path().join("good.zip");
+        fs::write(&zip_path, build_stored_zip("good.txt", b"safe content")).unwrap();
+
+        let extract_root = tempdir().unwrap();
+        let dest = extract_root.path().join("dest");
+        extract_zip_to_dir(&zip_path, &dest).unwrap();
+
+        let good = dest.join("good.txt");
+        assert!(good.exists(), "legitimate entry should be extracted");
+        assert_eq!(fs::read(&good).unwrap(), b"safe content");
+    }
+
+    #[test]
+    fn test_extract_zip_rejects_path_traversal() {
+        // Craft a zip whose single entry escapes the destination via "..".
+        let zip_dir = tempdir().unwrap();
+        let zip_path = zip_dir.path().join("malicious.zip");
+        fs::write(
+            &zip_path,
+            build_stored_zip("../escape.txt", b"malicious content"),
+        )
+        .unwrap();
+
+        // Extract into a nested destination so "../escape.txt" would land in
+        // the parent (still inside our temp root) if traversal were allowed.
+        let extract_root = tempdir().unwrap();
+        let dest = extract_root.path().join("dest");
+
+        // Extraction itself must succeed (the bad entry is skipped, not fatal).
+        extract_zip_to_dir(&zip_path, &dest).unwrap();
+
+        // The malicious entry must NOT escape the destination directory...
+        assert!(
+            !extract_root.path().join("escape.txt").exists(),
+            "malicious entry must not escape the destination directory"
+        );
+        // ...and must not be silently written inside dest under a stripped name.
+        assert!(
+            !dest.join("escape.txt").exists(),
+            "malicious traversal entry should be skipped entirely"
+        );
     }
 }
