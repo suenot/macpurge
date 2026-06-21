@@ -5,6 +5,7 @@ pub mod packages;
 pub mod devtools;
 pub mod ai_models;
 pub mod projects;
+pub mod usage_tree;
 
 pub use disk::*;
 pub use directory::*;
@@ -13,3 +14,4 @@ pub use packages::*;
 pub use devtools::*;
 pub use ai_models::*;
 pub use projects::*;
+pub use usage_tree::*;

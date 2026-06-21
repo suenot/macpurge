@@ -14,6 +14,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_os::init())
+        .manage(commands::usage::UsageCache::default())
         .setup(|app| {
             // Setup system tray
             tray::setup_tray(app)?;
@@ -103,6 +104,12 @@ pub fn run() {
             commands::projects::auto_commit_project,
             commands::projects::push_project,
             commands::projects::push_project_all,
+            // Disk usage (sunburst) commands
+            commands::usage::scan_usage,
+            commands::usage::get_usage_subtree,
+            commands::usage::cancel_usage_scan,
+            commands::usage::trash_usage_item,
+            commands::usage::reveal_in_finder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running MacPurge");

@@ -31,6 +31,8 @@ pub use scanner::{
     copy_dir_recursive, unique_dest_path,
     compress_dir_to_zip, extract_zip_to_dir,
     clean_artifacts_from_project, unique_zip_dest_path,
+    // Usage tree (sunburst)
+    UsageNode, UsageScanOptions, UsageScanProgressData, build_usage_tree,
 };
 
 pub use cleaners::{

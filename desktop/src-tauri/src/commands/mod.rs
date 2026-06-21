@@ -14,3 +14,4 @@ pub mod ai_models;
 pub mod recipes;
 pub mod schedule;
 pub mod projects;
+pub mod usage;
