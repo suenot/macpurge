@@ -5,18 +5,25 @@ use macpurge::{
     SystemScanner, SystemScanResult, Cleaner,
 };
 
+/// Runs on a blocking thread so the disk walk never stalls the async runtime /
+/// main thread (which on macOS would freeze the WebView and the page transition).
 #[tauri::command]
-pub fn scan_system() -> Result<SystemScanResult, String> {
-    let scanner = SystemScanner::new();
-    scanner.scan_all().map_err(|e| e.to_string())
+pub async fn scan_system() -> Result<SystemScanResult, String> {
+    tokio::task::spawn_blocking(|| {
+        let scanner = SystemScanner::new();
+        scanner.scan_all().map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn clean_system_category(
+pub async fn clean_system_category(
     category: String,
     dry_run: bool,
     min_age_days: Option<u64>,
 ) -> Result<CleanResult, String> {
+    tokio::task::spawn_blocking(move || {
     let cache_type = match category.as_str() {
         "user_cache" => SystemCacheType::UserCache,
         "browser_cache" => SystemCacheType::BrowserCache,
@@ -42,4 +49,7 @@ pub fn clean_system_category(
 
     let cleaner = SystemCacheCleaner::new(cache_type);
     cleaner.clean(&options).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }

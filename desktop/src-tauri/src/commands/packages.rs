@@ -2,52 +2,68 @@
 
 use macpurge::{PackageManagerInfo, PackageScanResult, PackageScanner, PkgManagerType};
 
-/// Scan all package managers
+/// Scan all package managers.
+///
+/// Runs on a blocking thread so the disk walk never stalls the async runtime /
+/// main thread (which on macOS would freeze the WebView and the page transition).
 #[tauri::command]
-pub fn scan_packages() -> Result<PackageScanResult, String> {
-    let scanner = PackageScanner::new();
-    scanner.scan_all().map_err(|e| e.to_string())
+pub async fn scan_packages() -> Result<PackageScanResult, String> {
+    tokio::task::spawn_blocking(|| {
+        let scanner = PackageScanner::new();
+        scanner.scan_all().map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Scan a specific package manager
 #[tauri::command]
-pub fn scan_package_manager(manager: String) -> Result<PackageManagerInfo, String> {
-    let scanner = PackageScanner::new();
+pub async fn scan_package_manager(manager: String) -> Result<PackageManagerInfo, String> {
+    tokio::task::spawn_blocking(move || {
+        let scanner = PackageScanner::new();
 
-    let pkg_type = match manager.to_lowercase().as_str() {
-        "npm" => PkgManagerType::Npm,
-        "yarn" => PkgManagerType::Yarn,
-        "pnpm" => PkgManagerType::Pnpm,
-        "pip" => PkgManagerType::Pip,
-        "cargo" => PkgManagerType::Cargo,
-        "rustup" => PkgManagerType::Rustup,
-        "go" => PkgManagerType::Go,
-        "gem" => PkgManagerType::Gem,
-        "brew" => PkgManagerType::Brew,
-        "composer" => PkgManagerType::Composer,
-        _ => return Err(format!("Unknown package manager: {}", manager)),
-    };
+        let pkg_type = match manager.to_lowercase().as_str() {
+            "npm" => PkgManagerType::Npm,
+            "yarn" => PkgManagerType::Yarn,
+            "pnpm" => PkgManagerType::Pnpm,
+            "pip" => PkgManagerType::Pip,
+            "cargo" => PkgManagerType::Cargo,
+            "rustup" => PkgManagerType::Rustup,
+            "go" => PkgManagerType::Go,
+            "gem" => PkgManagerType::Gem,
+            "brew" => PkgManagerType::Brew,
+            "composer" => PkgManagerType::Composer,
+            _ => return Err(format!("Unknown package manager: {}", manager)),
+        };
 
-    scanner.scan_manager(pkg_type).map_err(|e| e.to_string())
+        scanner.scan_manager(pkg_type).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Get list of installed package managers
 #[tauri::command]
-pub fn get_installed_package_managers() -> Result<Vec<String>, String> {
-    let scanner = PackageScanner::new();
-    let result = scanner.scan_all().map_err(|e| e.to_string())?;
+pub async fn get_installed_package_managers() -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(|| {
+        let scanner = PackageScanner::new();
+        let result = scanner.scan_all().map_err(|e| e.to_string())?;
 
-    Ok(result
-        .managers
-        .into_iter()
-        .filter(|m| m.is_installed)
-        .map(|m| m.manager.name().to_string())
-        .collect())
+        Ok(result
+            .managers
+            .into_iter()
+            .filter(|m| m.is_installed)
+            .map(|m| m.manager.name().to_string())
+            .collect())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Clean a specific cache path
 #[tauri::command]
-pub fn clean_package_cache(path: String, dry_run: bool) -> Result<CleanCacheResult, String> {
+pub async fn clean_package_cache(path: String, dry_run: bool) -> Result<CleanCacheResult, String> {
+    tokio::task::spawn_blocking(move || {
     use std::path::PathBuf;
 
     let cache_path = PathBuf::from(&path);
@@ -101,6 +117,9 @@ pub fn clean_package_cache(path: String, dry_run: bool) -> Result<CleanCacheResu
             message: e.to_string(),
         }),
     }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[derive(serde::Serialize)]

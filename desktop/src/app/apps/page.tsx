@@ -10,7 +10,9 @@ import { motion } from 'framer-motion';
 
 export default function AppsPage() {
   const [apps, setApps] = useState<AppInfo[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  // Start in the loading state so the spinner paints immediately on navigation,
+  // before the (now async) scan resolves — no flash of "No applications found".
+  const [isLoading, setIsLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loadingSizes, setLoadingSizes] = useState(false);
@@ -19,7 +21,7 @@ export default function AppsPage() {
   const abortRef = useRef(false);
 
   const loadApps = async () => {
-    if (!isTauri()) return;
+    if (!isTauri()) { setIsLoading(false); return; }
 
     setIsLoading(true);
     setError(null);

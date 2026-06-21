@@ -7,29 +7,40 @@ use macpurge::{
 };
 use std::path::PathBuf;
 
+/// Runs on a blocking thread so the disk walk never stalls the async runtime /
+/// main thread (which on macOS would freeze the WebView and the page transition).
 #[tauri::command]
-pub fn scan_devtools() -> Result<DevToolScanResult, String> {
-    let scanner = DevToolScanner::new();
-    scanner.scan_all().map_err(|e| e.to_string())
+pub async fn scan_devtools() -> Result<DevToolScanResult, String> {
+    tokio::task::spawn_blocking(|| {
+        let scanner = DevToolScanner::new();
+        scanner.scan_all().map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn scan_devtool(tool: String) -> Result<DevToolInfo, String> {
-    let scanner = DevToolScanner::new();
+pub async fn scan_devtool(tool: String) -> Result<DevToolInfo, String> {
+    tokio::task::spawn_blocking(move || {
+        let scanner = DevToolScanner::new();
 
-    let tool_type = match tool.to_lowercase().as_str() {
-        "xcode" => DevToolType::Xcode,
-        "android" | "android_studio" => DevToolType::AndroidStudio,
-        "docker" => DevToolType::Docker,
-        "vm" | "vms" | "virtual_machines" => DevToolType::VirtualMachines,
-        _ => return Err(format!("Unknown dev tool: {}", tool)),
-    };
+        let tool_type = match tool.to_lowercase().as_str() {
+            "xcode" => DevToolType::Xcode,
+            "android" | "android_studio" => DevToolType::AndroidStudio,
+            "docker" => DevToolType::Docker,
+            "vm" | "vms" | "virtual_machines" => DevToolType::VirtualMachines,
+            _ => return Err(format!("Unknown dev tool: {}", tool)),
+        };
 
-    scanner.scan_tool(tool_type).map_err(|e| e.to_string())
+        scanner.scan_tool(tool_type).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn clean_devtool_cache(path: String, dry_run: bool) -> Result<CleanResult, String> {
+pub async fn clean_devtool_cache(path: String, dry_run: bool) -> Result<CleanResult, String> {
+    tokio::task::spawn_blocking(move || {
     // Guard against deleting a protected location (e.g. a crafted or symlinked
     // path from the frontend). Skip the check for dry-run, which deletes nothing.
     if !dry_run {
@@ -50,4 +61,7 @@ pub fn clean_devtool_cache(path: String, dry_run: bool) -> Result<CleanResult, S
 
     let cleaner = DevToolsCleaner::path(PathBuf::from(&path));
     cleaner.clean(&options).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
