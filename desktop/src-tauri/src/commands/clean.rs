@@ -2,11 +2,26 @@
 
 use macpurge::CleanResult;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter};
 
-// Global cancellation flag
-static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
+// Per-operation cancellation.
+//
+// A single shared `AtomicBool` cannot distinguish between concurrent/overlapping
+// cleanups: cancelling one would cancel all of them, and starting a new cleanup
+// would silently un-cancel a running one. Instead we hand each cleanup a unique
+// generation id.
+//
+// `ACTIVE_GEN` is bumped (and read) every time a cleanup starts; the value after
+// the bump is that operation's id. `CANCELLED_GEN` holds the id of the operation
+// that has been asked to cancel. A cleanup with id `my_gen` is cancelled iff
+// `CANCELLED_GEN == my_gen`. Cancellation therefore targets one specific
+// operation, and incrementing `ACTIVE_GEN` for a new cleanup never disturbs the
+// cancellation state of a different, already-running one.
+//
+// Ids start at 1 (the first cleanup gets 1), so 0 is reserved for "no operation".
+static ACTIVE_GEN: AtomicU64 = AtomicU64::new(0);
+static CANCELLED_GEN: AtomicU64 = AtomicU64::new(0);
 
 /// Event payloads
 #[derive(Clone, serde::Serialize)]
@@ -33,17 +48,24 @@ pub struct CleanCompletedPayload {
     pub cancelled: bool,
 }
 
-/// Request cancellation of ongoing cleanup
+/// Request cancellation of the most recently started cleanup.
+///
+/// Targets the operation identified by the current `ACTIVE_GEN`, so it only
+/// affects that cleanup and leaves any other concurrent cleanup running.
 #[tauri::command]
 pub fn cancel_cleanup() -> bool {
-    CANCEL_REQUESTED.store(true, Ordering::SeqCst);
+    CANCELLED_GEN.store(ACTIVE_GEN.load(Ordering::SeqCst), Ordering::SeqCst);
     true
 }
 
-/// Check if cancellation was requested
+/// Check whether the most recently started cleanup has been cancelled.
+///
+/// True only when an operation exists (`ACTIVE_GEN != 0`) and it is the one
+/// currently marked cancelled.
 #[tauri::command]
 pub fn is_cleanup_cancelled() -> bool {
-    CANCEL_REQUESTED.load(Ordering::SeqCst)
+    let active = ACTIVE_GEN.load(Ordering::SeqCst);
+    active != 0 && CANCELLED_GEN.load(Ordering::SeqCst) == active
 }
 
 /// Clean multiple artifact paths with progress events
@@ -53,8 +75,11 @@ pub async fn clean_artifacts(
     paths: Vec<String>,
     dry_run: bool,
 ) -> Result<CleanResult, String> {
-    // Reset cancellation flag
-    CANCEL_REQUESTED.store(false, Ordering::SeqCst);
+    // Claim a unique generation id for this operation. We do NOT reset any
+    // shared flag, so a different cleanup that is already running keeps its own
+    // cancellation state. This op is cancelled only when `CANCELLED_GEN` is set
+    // to exactly `my_gen`.
+    let my_gen = ACTIVE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
 
     let total_items = paths.len();
 
@@ -76,8 +101,8 @@ pub async fn clean_artifacts(
         .unwrap_or(true);
 
     for (index, path_str) in paths.iter().enumerate() {
-        // Check for cancellation
-        if CANCEL_REQUESTED.load(Ordering::SeqCst) {
+        // Check for cancellation targeted specifically at this operation.
+        if CANCELLED_GEN.load(Ordering::SeqCst) == my_gen {
             let _ = app.emit(
                 "clean-completed",
                 CleanCompletedPayload {
