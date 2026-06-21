@@ -206,6 +206,9 @@ pub async fn archive_projects(
             );
 
             match macpurge::compress_dir_to_zip(&source, &dest) {
+                // `compress_dir_to_zip` only returns Ok after re-opening and
+                // validating the archive (see `verify_zip`), so reaching this
+                // arm means the zip is complete and the source is safe to move.
                 Ok(zip_size) => {
                     // Emit: deleting source
                     let _ = app.emit(
@@ -219,8 +222,9 @@ pub async fn archive_projects(
                         },
                     );
 
-                    // Delete source
-                    if let Err(e) = std::fs::remove_dir_all(&source) {
+                    // Move the source to Trash (recoverable) rather than a hard
+                    // delete, and only after archive verification succeeded.
+                    if let Err(e) = macpurge::remove_path(&source, false, true) {
                         let _ = std::fs::remove_file(&dest);
                         let _ = app.emit(
                             "archive-progress",

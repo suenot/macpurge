@@ -652,6 +652,11 @@ fn make_project_info(name: String, path: PathBuf, project_type: ProjectType, has
 
 // ── Helper functions ─────────────────────────────
 
+/// Whether a zip entry's unix mode marks it as a symlink (S_IFLNK).
+fn is_symlink_mode(mode: Option<u32>) -> bool {
+    matches!(mode, Some(m) if m & 0o170000 == 0o120000)
+}
+
 /// Count commits in a git revision range (e.g., "origin/main..HEAD")
 fn git_rev_count(path_str: &str, range: &str) -> u32 {
     Command::new("git")
@@ -727,20 +732,40 @@ fn get_dir_mtime(path: &Path) -> Option<i64> {
     latest
 }
 
-/// Compress a directory into a .zip file, returns total bytes written
+/// Compress a directory into a .zip file, returns total bytes written.
+///
+/// Symlinks are stored as real symlink entries (the link TARGET is recorded,
+/// not followed) so that archiving never silently drops data reachable only
+/// through a symlink. After writing, the produced archive is re-opened and
+/// validated via `verify_zip` so the caller can safely delete the source.
 pub fn compress_dir_to_zip(source: &Path, dest_zip: &Path) -> anyhow::Result<u64> {
     let file = fs::File::create(dest_zip)?;
     let mut zip_writer = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
+    // Symlink entries are stored verbatim; reuse the default options (the zip
+    // crate forces `Stored` + the S_IFLNK mode bit inside `add_symlink`).
+    let symlink_options = zip::write::SimpleFileOptions::default();
 
+    // Do NOT follow symlinks (avoids loops and double-archiving the target).
     for entry in walkdir::WalkDir::new(source).min_depth(1) {
         let entry = entry?;
         let path = entry.path();
         let relative = path.strip_prefix(source)?;
         let name = relative.to_string_lossy();
 
-        if entry.file_type().is_dir() {
+        // Check symlink first: `file_type().is_file()/is_dir()` on a walkdir
+        // entry already reflects the link itself (no follow), but be explicit.
+        if entry.path_is_symlink() {
+            // Store the link target as a real symlink entry. `read_link`
+            // returns the target path without following it.
+            let target = fs::read_link(path)?;
+            zip_writer.add_symlink(
+                name.to_string(),
+                target.to_string_lossy().to_string(),
+                symlink_options,
+            )?;
+        } else if entry.file_type().is_dir() {
             zip_writer.add_directory(format!("{}/", name), options)?;
         } else if entry.file_type().is_file() {
             zip_writer.start_file(name.to_string(), options)?;
@@ -749,13 +774,58 @@ pub fn compress_dir_to_zip(source: &Path, dest_zip: &Path) -> anyhow::Result<u64
             f.read_to_end(&mut buffer)?;
             zip_writer.write_all(&buffer)?;
         }
-        // Symlinks are skipped in zip archives
     }
 
     zip_writer.finish()?;
+
+    // Integrity check: a successful `finish()` does NOT prove a complete,
+    // readable archive (e.g. a disk-full mid-write can still return Ok). The
+    // source must never be deleted unless this passes.
+    verify_zip(dest_zip)?;
+
     // Return the size of the zip file itself
     let zip_size = fs::metadata(dest_zip)?.len();
     Ok(zip_size)
+}
+
+/// Validate that `path` is a complete, readable zip archive.
+///
+/// Re-opens the file, requires at least one entry, and iterates every entry
+/// (decompressing a small prefix of each) to surface truncation or corruption
+/// that `ZipWriter::finish()` cannot detect. Returns Err if anything fails.
+pub fn verify_zip(path: &Path) -> anyhow::Result<()> {
+    let file = fs::File::open(path)?;
+    let mut archive = zip::ZipArchive::new(file)?;
+
+    if archive.is_empty() {
+        anyhow::bail!("archive verification failed: zip contains no entries");
+    }
+
+    let mut scratch = [0u8; 4096];
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| anyhow::anyhow!("archive verification failed at entry {}: {}", i, e))?;
+        // Directories have no readable body; symlink/file bodies must decode
+        // without error. Read in chunks to catch truncated/corrupt streams
+        // without buffering huge files entirely.
+        if !entry.is_dir() {
+            loop {
+                let n = entry.read(&mut scratch).map_err(|e| {
+                    anyhow::anyhow!(
+                        "archive verification failed reading entry {}: {}",
+                        i,
+                        e
+                    )
+                })?;
+                if n == 0 {
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Extract a .zip file to a directory, returns total bytes extracted
@@ -794,8 +864,28 @@ pub fn extract_zip_to_dir(zip_path: &Path, dest: &Path) -> anyhow::Result<u64> {
             continue;
         }
 
+        // Read the unix mode before consuming the entry as a reader so we can
+        // detect symlink entries (mode & S_IFMT == S_IFLNK).
+        let unix_mode = entry.unix_mode();
+
         if entry.is_dir() {
             fs::create_dir_all(&outpath)?;
+        } else if is_symlink_mode(unix_mode) {
+            // Symlink entry: the body is the link target, recreate the symlink
+            // instead of writing a regular file. Still bound by the zip-slip
+            // containment guard above (the LINK location stays within `dest`;
+            // the target itself is not resolved here).
+            let mut target_bytes = Vec::new();
+            entry.read_to_end(&mut target_bytes)?;
+            let target = String::from_utf8_lossy(&target_bytes).to_string();
+
+            if let Some(parent) = outpath.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            // Remove any pre-existing entry so symlink creation does not fail.
+            let _ = fs::remove_file(&outpath);
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&target, &outpath)?;
         } else {
             if let Some(parent) = outpath.parent() {
                 fs::create_dir_all(parent)?;
@@ -808,7 +898,7 @@ pub fn extract_zip_to_dir(zip_path: &Path, dest: &Path) -> anyhow::Result<u64> {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                if let Some(mode) = entry.unix_mode() {
+                if let Some(mode) = unix_mode {
                     fs::set_permissions(&outpath, fs::Permissions::from_mode(mode))?;
                 }
             }
@@ -1036,6 +1126,68 @@ mod tests {
         assert!(
             !dest.join("escape.txt").exists(),
             "malicious traversal entry should be skipped entirely"
+        );
+    }
+
+    #[test]
+    fn test_archive_preserves_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        // Build a source dir with a regular file plus a symlink pointing at it.
+        let src = tempdir().unwrap();
+        fs::write(src.path().join("real.txt"), b"hello world").unwrap();
+        symlink("real.txt", src.path().join("link.txt")).unwrap();
+
+        // Archive then extract.
+        let zip_dir = tempdir().unwrap();
+        let zip_path = zip_dir.path().join("project.zip");
+        compress_dir_to_zip(src.path(), &zip_path).unwrap();
+
+        let out_root = tempdir().unwrap();
+        let dest = out_root.path().join("restored");
+        extract_zip_to_dir(&zip_path, &dest).unwrap();
+
+        // The regular file survives with its contents.
+        assert_eq!(fs::read(dest.join("real.txt")).unwrap(), b"hello world");
+
+        // The symlink is preserved as a symlink pointing at the same target,
+        // NOT materialized as a regular file or silently dropped.
+        let link = dest.join("link.txt");
+        let meta = fs::symlink_metadata(&link).unwrap();
+        assert!(
+            meta.file_type().is_symlink(),
+            "restored entry should be a symlink, not a regular file"
+        );
+        assert_eq!(
+            fs::read_link(&link).unwrap(),
+            PathBuf::from("real.txt"),
+            "symlink should point at the same target it had in the source"
+        );
+    }
+
+    #[test]
+    fn test_verify_zip_accepts_good_and_rejects_bad() {
+        // A real archive produced by our own writer must verify Ok.
+        let src = tempdir().unwrap();
+        fs::write(src.path().join("a.txt"), b"content").unwrap();
+        let zip_dir = tempdir().unwrap();
+        let good = zip_dir.path().join("good.zip");
+        compress_dir_to_zip(src.path(), &good).unwrap();
+        assert!(verify_zip(&good).is_ok(), "valid zip should verify");
+
+        // Garbage bytes are not a zip at all.
+        let garbage = zip_dir.path().join("garbage.zip");
+        fs::write(&garbage, b"this is not a zip file at all").unwrap();
+        assert!(verify_zip(&garbage).is_err(), "garbage must fail verification");
+
+        // A truncated archive (header present, body/central-dir cut off) must
+        // also fail rather than be accepted as complete.
+        let full = fs::read(&good).unwrap();
+        let truncated = zip_dir.path().join("truncated.zip");
+        fs::write(&truncated, &full[..full.len() / 2]).unwrap();
+        assert!(
+            verify_zip(&truncated).is_err(),
+            "truncated zip must fail verification"
         );
     }
 }
