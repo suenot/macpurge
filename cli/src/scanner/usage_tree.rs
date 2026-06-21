@@ -58,6 +58,10 @@ pub struct UsageScanOptions {
     /// When true, follow symlinks. Default false: symlinks are marked but never
     /// traversed (avoids loops and double counting).
     pub follow_links: bool,
+    /// Globally-excluded directories (already expanded). Any entry equal to or
+    /// nested under one of these is pruned from the walk: it is never descended
+    /// into and its size is never counted. Empty by default.
+    pub excluded: Vec<PathBuf>,
 }
 
 impl Default for UsageScanOptions {
@@ -66,6 +70,7 @@ impl Default for UsageScanOptions {
             max_depth: 12,
             on_disk: true,
             follow_links: false,
+            excluded: Vec::new(),
         }
     }
 }
@@ -132,6 +137,13 @@ pub fn build_usage_tree(
         .max_depth(opts.max_depth)
         .contents_first(true);
 
+    // `filter_entry` cannot be used to prune here: it is incompatible with
+    // `contents_first(true)` (rejecting a directory drops its siblings too).
+    // Instead we test each yielded entry against the pre-expanded exclude list
+    // and skip any excluded entry before accounting. Because every path under an
+    // excluded directory also satisfies `is_path_excluded`, the entire excluded
+    // subtree is skipped and never rolled into any parent's size/count.
+    let excluded = &opts.excluded;
     let mut iter = walker.into_iter();
     loop {
         let next = match iter.next() {
@@ -165,6 +177,13 @@ pub fn build_usage_tree(
         };
 
         let path = entry.path().to_path_buf();
+
+        // Skip globally-excluded paths (and everything nested under them): they
+        // are never sized, counted, or rolled into a parent.
+        if !excluded.is_empty() && crate::config::is_path_excluded(&path, excluded) {
+            continue;
+        }
+
         let file_type = entry.file_type();
         // `symlink_metadata`-equivalent: WalkDir with follow_links(false) reports
         // the link itself, so `file_type.is_symlink()` is the link, not target.
@@ -468,6 +487,7 @@ mod tests {
             max_depth: 12,
             on_disk,
             follow_links: false,
+            excluded: Vec::new(),
         };
         let mut noop = |_p: UsageScanProgressData| {};
         build_usage_tree(root, &opts, &cancel, &mut noop).unwrap()
@@ -590,6 +610,38 @@ mod tests {
     }
 
     #[test]
+    fn excluded_subdir_is_pruned_and_uncounted() {
+        let dir = make_tree();
+        let root = dir.path();
+        let excluded_subdir = root.join("big");
+
+        let cancel = AtomicBool::new(false);
+        let opts = UsageScanOptions {
+            max_depth: 12,
+            on_disk: false,
+            follow_links: false,
+            excluded: vec![excluded_subdir.clone()],
+        };
+        let mut noop = |_p: UsageScanProgressData| {};
+        let tree = build_usage_tree(root, &opts, &cancel, &mut noop).unwrap();
+
+        // `big/` (200_000 bytes) is excluded: it must not appear as a child...
+        assert!(
+            tree.children.iter().all(|c| c.name != "big"),
+            "excluded subdir must not appear in the tree"
+        );
+        // ...nor be findable anywhere in the tree...
+        assert!(
+            tree.find(&excluded_subdir).is_none(),
+            "excluded subdir must not be reachable via find()"
+        );
+        // ...and its size must not be counted toward the root total. Only
+        // a.txt (4096) + small/ (4) remain.
+        assert_eq!(tree.size_bytes, 4096 + 2 + 2);
+        assert_eq!(tree.file_count, 3); // a, c, d (b.bin excluded)
+    }
+
+    #[test]
     fn cancellation_returns_early() {
         let dir = make_tree();
         let cancel = AtomicBool::new(true); // pre-cancelled
@@ -597,6 +649,7 @@ mod tests {
             max_depth: 12,
             on_disk: false,
             follow_links: false,
+            excluded: Vec::new(),
         };
         let mut noop = |_p: UsageScanProgressData| {};
         // Should not panic and should return some (possibly partial) tree.

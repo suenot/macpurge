@@ -87,9 +87,14 @@ impl DevArtifactsCleaner {
     }
 
     fn get_entries(&self) -> Result<Vec<ScannedEntry>> {
+        // Honor the global "never scan" exclude list (loaded once per scan).
+        let excluded = crate::config::get_excluded_dirs(
+            &crate::config::load_config().unwrap_or_default(),
+        );
         let scanner = DirectoryScanner::new(ScanOptions {
             dev_mode: true,
             show_progress: false,
+            excluded,
             ..Default::default()
         });
 

@@ -64,6 +64,10 @@ pub struct ScanOptions {
     pub max_depth: Option<usize>,
     pub min_size: Option<u64>,
     pub show_progress: bool,
+    /// Globally-excluded directories (already expanded). Any entry equal to or
+    /// nested under one of these is pruned from the walk and never reported.
+    /// Empty by default.
+    pub excluded: Vec<PathBuf>,
 }
 
 /// Scanner for directories
@@ -115,7 +119,15 @@ impl DirectoryScanner {
         let scanned_count = Arc::new(AtomicU64::new(0));
         let mut skip_prefixes: Vec<PathBuf> = Vec::new();
 
+        // Pre-expanded global exclude list, captured once and checked per entry
+        // so excluded folders are never descended into nor reported.
+        let excluded = self.options.excluded.clone();
+
         for entry in walker.into_iter().filter_entry(|e| {
+            // Prune globally-excluded directories (and anything nested under them).
+            if crate::config::is_path_excluded(e.path(), &excluded) {
+                return false;
+            }
             let name = e.file_name().to_string_lossy();
             // Skip hidden directories unless include_hidden (but allow .venv, .next, .nuxt, .gradle)
             if !self.options.include_hidden && name.starts_with('.') {

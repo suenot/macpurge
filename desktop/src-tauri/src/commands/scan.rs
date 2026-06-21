@@ -20,6 +20,7 @@ pub async fn scan_dev() -> Result<Vec<ScanResult>, String> {
             max_depth: Some(config.scan.max_depth),
             min_size: config.scan.min_size_bytes,
             show_progress: false,
+            excluded: macpurge::get_excluded_dirs(&config),
         });
 
         let mut results = Vec::new();
@@ -58,6 +59,7 @@ pub async fn scan_path(path: String) -> Result<ScanResult, String> {
             max_depth: Some(config.scan.max_depth),
             min_size: config.scan.min_size_bytes,
             show_progress: false,
+            excluded: macpurge::get_excluded_dirs(&config),
         });
 
         scanner.scan(&path).map_err(|e| e.to_string())

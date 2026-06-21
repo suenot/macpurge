@@ -199,7 +199,10 @@ impl ProjectScanner {
     /// Scan project directories for projects (fast, no size calculation).
     /// Checks 2 levels deep: immediate children + children of non-project folders.
     /// Returns projects sorted by last_modified descending.
-    pub fn scan_projects(project_dirs: &[PathBuf]) -> Vec<ProjectInfo> {
+    ///
+    /// `excluded` is the pre-expanded global "never scan" list; any folder equal
+    /// to or nested under one of those is skipped and never listed as a project.
+    pub fn scan_projects(project_dirs: &[PathBuf], excluded: &[PathBuf]) -> Vec<ProjectInfo> {
         let mut projects = Vec::new();
 
         for dir in project_dirs {
@@ -215,6 +218,11 @@ impl ProjectScanner {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if !path.is_dir() {
+                    continue;
+                }
+
+                // Skip globally-excluded folders.
+                if crate::config::is_path_excluded(&path, excluded) {
                     continue;
                 }
 
@@ -239,6 +247,9 @@ impl ProjectScanner {
                     for sub_entry in sub_entries.flatten() {
                         let sub_path = sub_entry.path();
                         if !sub_path.is_dir() {
+                            continue;
+                        }
+                        if crate::config::is_path_excluded(&sub_path, excluded) {
                             continue;
                         }
                         let sub_name = match sub_path.file_name().and_then(|n| n.to_str()) {
@@ -269,7 +280,11 @@ impl ProjectScanner {
     /// Depth-1 projects become ProjectTreeEntry::Project.
     /// Depth-1 non-project folders with project children become ProjectTreeEntry::Group.
     /// Returns entries sorted by last_modified descending.
-    pub fn scan_projects_tree(project_dirs: &[PathBuf]) -> Vec<ProjectTreeEntry> {
+    ///
+    /// `excluded` is the pre-expanded global "never scan" list; any folder equal
+    /// to or nested under one of those is skipped (neither listed as a project
+    /// nor descended into as a group).
+    pub fn scan_projects_tree(project_dirs: &[PathBuf], excluded: &[PathBuf]) -> Vec<ProjectTreeEntry> {
         let mut entries = Vec::new();
 
         for dir in project_dirs {
@@ -285,6 +300,11 @@ impl ProjectScanner {
             for entry in dir_entries.flatten() {
                 let path = entry.path();
                 if !path.is_dir() {
+                    continue;
+                }
+
+                // Skip globally-excluded folders.
+                if crate::config::is_path_excluded(&path, excluded) {
                     continue;
                 }
 
@@ -312,6 +332,9 @@ impl ProjectScanner {
                     for sub_entry in sub_entries.flatten() {
                         let sub_path = sub_entry.path();
                         if !sub_path.is_dir() {
+                            continue;
+                        }
+                        if crate::config::is_path_excluded(&sub_path, excluded) {
                             continue;
                         }
                         let sub_name = match sub_path.file_name().and_then(|n| n.to_str()) {
@@ -990,7 +1013,7 @@ mod tests {
     #[test]
     fn test_scan_projects_empty() {
         let dir = tempdir().unwrap();
-        let projects = ProjectScanner::scan_projects(&[dir.path().to_path_buf()]);
+        let projects = ProjectScanner::scan_projects(&[dir.path().to_path_buf()], &[]);
         assert!(projects.is_empty());
     }
 
@@ -1001,10 +1024,28 @@ mod tests {
         fs::create_dir(&project_dir).unwrap();
         fs::write(project_dir.join("package.json"), "{}").unwrap();
 
-        let projects = ProjectScanner::scan_projects(&[dir.path().to_path_buf()]);
+        let projects = ProjectScanner::scan_projects(&[dir.path().to_path_buf()], &[]);
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].name, "my-app");
         assert_eq!(projects[0].project_type, ProjectType::Node);
+    }
+
+    #[test]
+    fn test_scan_projects_skips_excluded() {
+        let dir = tempdir().unwrap();
+        // Two sibling Node projects; one is on the exclude list.
+        let kept = dir.path().join("kept");
+        fs::create_dir(&kept).unwrap();
+        fs::write(kept.join("package.json"), "{}").unwrap();
+
+        let skipped = dir.path().join("skipped");
+        fs::create_dir(&skipped).unwrap();
+        fs::write(skipped.join("package.json"), "{}").unwrap();
+
+        let projects =
+            ProjectScanner::scan_projects(&[dir.path().to_path_buf()], &[skipped.clone()]);
+        assert_eq!(projects.len(), 1, "excluded project must not be listed");
+        assert_eq!(projects[0].name, "kept");
     }
 
     /// Minimal CRC-32 (IEEE) for hand-crafting a valid zip in tests, since the

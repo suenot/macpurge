@@ -50,8 +50,12 @@ pub async fn scan_usage(
     SCAN_CANCEL.store(false, Ordering::SeqCst);
 
     let app_for_scan = app.clone();
+    // Honor the global "never scan" exclude list: folders in `excluded_dirs`
+    // are pruned from the walk so they never show up or count toward usage.
+    let excluded = macpurge::get_excluded_dirs(&macpurge::load_config().unwrap_or_default());
     let opts = UsageScanOptions {
         on_disk,
+        excluded,
         ..Default::default()
     };
 

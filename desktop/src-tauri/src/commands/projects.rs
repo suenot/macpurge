@@ -58,7 +58,8 @@ pub async fn list_projects() -> Result<Vec<macpurge::ProjectInfo>, String> {
             return Ok(Vec::new());
         }
 
-        let projects = macpurge::ProjectScanner::scan_projects(&project_dirs);
+        let excluded = macpurge::get_excluded_dirs(&config);
+        let projects = macpurge::ProjectScanner::scan_projects(&project_dirs, &excluded);
         Ok::<_, String>(projects)
     })
     .await
@@ -76,7 +77,8 @@ pub async fn list_projects_tree() -> Result<Vec<macpurge::ProjectTreeEntry>, Str
             return Ok(Vec::new());
         }
 
-        let tree = macpurge::ProjectScanner::scan_projects_tree(&project_dirs);
+        let excluded = macpurge::get_excluded_dirs(&config);
+        let tree = macpurge::ProjectScanner::scan_projects_tree(&project_dirs, &excluded);
         Ok::<_, String>(tree)
     })
     .await

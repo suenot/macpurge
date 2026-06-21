@@ -609,12 +609,16 @@ fn cmd_scan(
 ) -> Result<()> {
     let min_size_bytes = min_size.and_then(|s| utils::parse_size(&s));
 
+    // Honor the global "never scan" exclude list.
+    let excluded = macpurge::get_excluded_dirs(&macpurge::load_config().unwrap_or_default());
+
     let options = ScanOptions {
         dev_mode: dev,
         include_hidden: hidden,
         max_depth,
         min_size: min_size_bytes,
         show_progress: output == "text",
+        excluded,
     };
 
     let scanner = DirectoryScanner::new(options);
@@ -1254,6 +1258,7 @@ fn cmd_scan_dev(
         max_depth: Some(config.scan.max_depth),
         min_size: min_size_bytes,
         show_progress: output == "text",
+        excluded: macpurge::get_excluded_dirs(&config),
     };
 
     let scanner = DirectoryScanner::new(options);
