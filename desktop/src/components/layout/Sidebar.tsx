@@ -64,9 +64,13 @@ export function Sidebar() {
   useEffect(() => {
     if (!isTauri()) return;
 
+    let mounted = true;
+    let unlisten: (() => void) | undefined;
+
     const fetchDisks = async () => {
       try {
         const data = await getUserDisks();
+        if (!mounted) return;
         // Sort: system disk first, then by name
         data.sort((a, b) => {
           if (a.disk_type === 'system') return -1;
@@ -81,16 +85,21 @@ export function Sidebar() {
 
     fetchDisks();
 
-    // Listen for disk change events (mount/unmount/space updates)
-    let unlisten: (() => void) | undefined;
-    onDisksChanged(() => {
-      fetchDisks();
-    }).then(fn => { unlisten = fn; });
+    (async () => {
+      // Listen for disk change events (mount/unmount/space updates)
+      unlisten = await onDisksChanged(() => {
+        if (!mounted) return;
+        fetchDisks();
+      });
+      // Unmounted while `await onDisksChanged` was in flight.
+      if (!mounted) { unlisten?.(); unlisten = undefined; }
+    })();
 
     // Periodic fallback for space changes
     const interval = setInterval(fetchDisks, 30000);
 
     return () => {
+      mounted = false;
       clearInterval(interval);
       unlisten?.();
     };

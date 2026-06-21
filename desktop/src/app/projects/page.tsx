@@ -384,23 +384,30 @@ export default function ProjectsPage() {
   useEffect(() => {
     if (!isTauri()) return;
 
+    let mounted = true;
     let unlisten: (() => void) | undefined;
-    onArchiveProgress((payload) => {
-      setArchiveProgress(prev => {
-        const next = new Map(prev);
-        next.set(payload.project_name, payload);
-        return next;
-      });
 
-      if (payload.status === 'completed' || payload.status === 'error') {
-        if (payload.status === 'completed') {
-          setSuccess(`${payload.project_name} archived successfully`);
-          setTimeout(() => setSuccess(null), 3000);
+    (async () => {
+      unlisten = await onArchiveProgress((payload) => {
+        if (!mounted) return;
+        setArchiveProgress(prev => {
+          const next = new Map(prev);
+          next.set(payload.project_name, payload);
+          return next;
+        });
+
+        if (payload.status === 'completed' || payload.status === 'error') {
+          if (payload.status === 'completed') {
+            setSuccess(`${payload.project_name} archived successfully`);
+            setTimeout(() => setSuccess(null), 3000);
+          }
         }
-      }
-    }).then(fn => { unlisten = fn; });
+      });
+      // Unmounted while `await onArchiveProgress` was in flight.
+      if (!mounted) { unlisten?.(); unlisten = undefined; }
+    })();
 
-    return () => { unlisten?.(); };
+    return () => { mounted = false; unlisten?.(); };
   }, []);
 
   // Sorting
