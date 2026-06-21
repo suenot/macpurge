@@ -7,6 +7,8 @@ import { motion } from 'framer-motion';
 import { scanAiModels, cleanAiModelPath, isTauri } from '@/lib/tauri';
 import type { AiModelScanResult, AiModelPath } from '@/lib/types';
 import { formatBytes } from '@/lib/types';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { useConfirmBeforeDelete } from '@/hooks/useConfirmBeforeDelete';
 
 const toolIcons: Record<string, typeof BrainCircuit> = {
   ollama: Box,
@@ -34,6 +36,8 @@ export default function AiModelsPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [cleaning, setCleaning] = useState(false);
   const [cleanedPaths, setCleanedPaths] = useState<Set<string>>(new Set());
+  const [confirmClean, setConfirmClean] = useState(false);
+  const confirmBeforeDelete = useConfirmBeforeDelete();
 
   const handleScan = async () => {
     if (!isTauri()) return;
@@ -71,8 +75,18 @@ export default function AiModelsPage() {
     });
   };
 
-  const handleClean = async () => {
+  const handleClean = () => {
     if (!isTauri() || selected.size === 0) return;
+    if (confirmBeforeDelete) {
+      setConfirmClean(true);
+      return;
+    }
+    runClean();
+  };
+
+  const runClean = async () => {
+    if (!isTauri() || selected.size === 0) return;
+    setConfirmClean(false);
     setCleaning(true);
     for (const path of selected) {
       try {
@@ -225,6 +239,19 @@ export default function AiModelsPage() {
             Click &quot;Scan All&quot; to discover downloaded models from Ollama, LM Studio, the Hugging Face cache (MLX, paroquant, diffusers), and ComfyUI.
           </p>
         </div>
+      )}
+
+      {/* Destructive clean confirmation */}
+      {confirmClean && (
+        <ConfirmDialog
+          title="Delete selected models?"
+          message={`Permanently delete ${selected.size} model${selected.size === 1 ? '' : 's'}. Re-downloading them later may take significant time and bandwidth.`}
+          paths={Array.from(selected)}
+          totalSize={formatBytes(totalSelected)}
+          confirmLabel="Delete"
+          onCancel={() => setConfirmClean(false)}
+          onConfirm={runClean}
+        />
       )}
     </div>
   );

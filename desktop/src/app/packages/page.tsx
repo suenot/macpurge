@@ -7,6 +7,8 @@ import { scanPackages, cleanPackageCache, isTauri } from '@/lib/tauri';
 import type { PackageScanResult, PackageManagerInfo, CachePath } from '@/lib/types';
 import { formatBytes } from '@/lib/types';
 import { motion, AnimatePresence } from 'framer-motion';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { useConfirmBeforeDelete } from '@/hooks/useConfirmBeforeDelete';
 
 // Package manager icons/colors
 const managerConfig: Record<string, { icon: string; color: string }> = {
@@ -28,6 +30,9 @@ export default function PackagesPage() {
   const [error, setError] = useState<string | null>(null);
   const [cleaning, setCleaning] = useState<string | null>(null);
   const [selectedCaches, setSelectedCaches] = useState<Set<string>>(new Set());
+  // Holds the paths awaiting confirmation before a destructive clean runs.
+  const [pendingClean, setPendingClean] = useState<string[] | null>(null);
+  const confirmBeforeDelete = useConfirmBeforeDelete();
 
   const fetchData = async () => {
     if (!isTauri()) {
@@ -53,7 +58,16 @@ export default function PackagesPage() {
     fetchData();
   }, []);
 
-  const handleCleanCache = async (path: string) => {
+  // Per-row clean: gate behind a confirmation modal when configured to do so.
+  const handleCleanCache = (path: string) => {
+    if (confirmBeforeDelete) {
+      setPendingClean([path]);
+      return;
+    }
+    runCleanCache(path);
+  };
+
+  const runCleanCache = async (path: string) => {
     setCleaning(path);
     try {
       const result = await cleanPackageCache(path, false);
@@ -70,11 +84,46 @@ export default function PackagesPage() {
     }
   };
 
-  const handleCleanSelected = async () => {
-    for (const path of selectedCaches) {
-      await handleCleanCache(path);
+  const handleCleanSelected = () => {
+    if (selectedCaches.size === 0) return;
+    if (confirmBeforeDelete) {
+      setPendingClean(Array.from(selectedCaches));
+      return;
+    }
+    runCleanSelected(Array.from(selectedCaches));
+  };
+
+  const runCleanSelected = async (paths: string[]) => {
+    for (const path of paths) {
+      await runCleanCache(path);
     }
     setSelectedCaches(new Set());
+  };
+
+  // Runs the pending clean once the user confirms. A single path came from a
+  // row's trash button; multiple paths came from "Clean Selected".
+  const confirmPendingClean = () => {
+    const paths = pendingClean;
+    setPendingClean(null);
+    if (!paths) return;
+    if (paths.length === 1) {
+      runCleanCache(paths[0]);
+    } else {
+      runCleanSelected(paths);
+    }
+  };
+
+  // Total size of the caches awaiting confirmation, for the modal label.
+  const pendingCleanSize = (): number => {
+    if (!result || !pendingClean) return 0;
+    const set = new Set(pendingClean);
+    let size = 0;
+    for (const manager of result.managers) {
+      for (const cache of manager.cache_paths) {
+        if (set.has(cache.path)) size += cache.size_bytes;
+      }
+    }
+    return size;
   };
 
   const toggleCacheSelection = (path: string) => {
@@ -232,6 +281,19 @@ export default function PackagesPage() {
               </motion.div>
             ))}
         </div>
+      )}
+
+      {/* Destructive clean confirmation */}
+      {pendingClean && (
+        <ConfirmDialog
+          title="Clean selected caches?"
+          message={`Permanently delete ${pendingClean.length} package cache${pendingClean.length === 1 ? '' : 's'}. Package managers will re-download these on next use.`}
+          paths={pendingClean}
+          totalSize={formatBytes(pendingCleanSize())}
+          confirmLabel="Clean"
+          onCancel={() => setPendingClean(null)}
+          onConfirm={confirmPendingClean}
+        />
       )}
     </div>
   );

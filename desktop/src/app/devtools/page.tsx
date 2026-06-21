@@ -7,6 +7,8 @@ import { motion } from 'framer-motion';
 import { scanDevtools, cleanDevtoolCache, isTauri } from '@/lib/tauri';
 import type { DevToolScanResult, DevToolInfo, DevToolCachePath } from '@/lib/types';
 import { formatBytes } from '@/lib/types';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { useConfirmBeforeDelete } from '@/hooks/useConfirmBeforeDelete';
 
 const toolIcons: Record<string, typeof Monitor> = {
   xcode: Monitor,
@@ -21,6 +23,8 @@ export default function DevToolsPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [cleaning, setCleaning] = useState(false);
   const [cleanedPaths, setCleanedPaths] = useState<Set<string>>(new Set());
+  const [confirmClean, setConfirmClean] = useState(false);
+  const confirmBeforeDelete = useConfirmBeforeDelete();
 
   const handleScan = async () => {
     if (!isTauri()) return;
@@ -47,8 +51,18 @@ export default function DevToolsPage() {
     });
   };
 
-  const handleClean = async () => {
+  const handleClean = () => {
     if (!isTauri() || selected.size === 0) return;
+    if (confirmBeforeDelete) {
+      setConfirmClean(true);
+      return;
+    }
+    runClean();
+  };
+
+  const runClean = async () => {
+    if (!isTauri() || selected.size === 0) return;
+    setConfirmClean(false);
     setCleaning(true);
     for (const path of selected) {
       try {
@@ -193,6 +207,19 @@ export default function DevToolsPage() {
             Click "Scan All" to discover caches from Xcode, Android Studio, Docker, and virtual machines.
           </p>
         </div>
+      )}
+
+      {/* Destructive clean confirmation */}
+      {confirmClean && (
+        <ConfirmDialog
+          title="Clean selected caches?"
+          message={`Permanently delete ${selected.size} dev tool cache${selected.size === 1 ? '' : 's'}.`}
+          paths={Array.from(selected)}
+          totalSize={formatBytes(totalSelected)}
+          confirmLabel="Clean"
+          onCancel={() => setConfirmClean(false)}
+          onConfirm={runClean}
+        />
       )}
     </div>
   );

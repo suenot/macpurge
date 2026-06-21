@@ -18,6 +18,8 @@ import { motion } from 'framer-motion';
 import { scanSystem, cleanSystemCategory, isTauri } from '@/lib/tauri';
 import type { SystemScanResult, SystemCategoryInfo } from '@/lib/types';
 import { formatBytes } from '@/lib/types';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { useConfirmBeforeDelete } from '@/hooks/useConfirmBeforeDelete';
 
 const categoryIcons: Record<string, typeof Shield> = {
   user_cache: HardDrive,
@@ -36,6 +38,8 @@ export default function SystemPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [cleaning, setCleaning] = useState<Set<string>>(new Set());
   const [cleaned, setCleaned] = useState<Set<string>>(new Set());
+  const [confirmClean, setConfirmClean] = useState(false);
+  const confirmBeforeDelete = useConfirmBeforeDelete();
 
   const handleScan = async () => {
     if (!isTauri()) return;
@@ -62,8 +66,18 @@ export default function SystemPage() {
     });
   };
 
-  const handleClean = async () => {
+  const handleClean = () => {
     if (!isTauri() || selected.size === 0) return;
+    if (confirmBeforeDelete) {
+      setConfirmClean(true);
+      return;
+    }
+    runClean();
+  };
+
+  const runClean = async () => {
+    if (!isTauri() || selected.size === 0) return;
+    setConfirmClean(false);
     for (const cat of selected) {
       setCleaning((prev) => new Set([...prev, cat]));
       try {
@@ -211,6 +225,25 @@ export default function SystemPage() {
             Click &quot;Scan System&quot; to discover system logs, browser caches, iOS backups, old downloads, and more.
           </p>
         </div>
+      )}
+
+      {/* Destructive clean confirmation */}
+      {confirmClean && (
+        <ConfirmDialog
+          title="Clean selected caches?"
+          message={`Permanently delete ${selected.size} categor${selected.size === 1 ? 'y' : 'ies'} of system caches and logs.`}
+          paths={
+            result
+              ? result.categories
+                  .filter((c) => selected.has(c.category))
+                  .map((c) => c.name)
+              : []
+          }
+          totalSize={formatBytes(totalSelected)}
+          confirmLabel="Clean"
+          onCancel={() => setConfirmClean(false)}
+          onConfirm={runClean}
+        />
       )}
     </div>
   );

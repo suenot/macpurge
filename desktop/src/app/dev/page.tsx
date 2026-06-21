@@ -16,6 +16,8 @@ import {
 } from '@/lib/tauri';
 import type { ScanResult, CleanProgressPayload, CleanCompletedPayload } from '@/lib/types';
 import { formatBytes } from '@/lib/types';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { useConfirmBeforeDelete } from '@/hooks/useConfirmBeforeDelete';
 
 type ItemStatus = 'pending' | 'deleting' | 'deleted' | 'error' | 'skipped';
 
@@ -33,6 +35,8 @@ export default function DevPage() {
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<string>('all');
   const [error, setError] = useState<string | null>(null);
+  const [confirmClean, setConfirmClean] = useState(false);
+  const confirmBeforeDelete = useConfirmBeforeDelete();
 
   // Cleanup progress state
   const [cleanProgress, setCleanProgress] = useState<Map<string, ItemState>>(new Map());
@@ -140,9 +144,19 @@ export default function DevPage() {
     }
   };
 
-  const handleClean = async () => {
+  const handleClean = () => {
+    if (selectedPaths.size === 0) return;
+    if (confirmBeforeDelete) {
+      setConfirmClean(true);
+      return;
+    }
+    runClean();
+  };
+
+  const runClean = async () => {
     if (selectedPaths.size === 0) return;
 
+    setConfirmClean(false);
     setError(null);
     const paths = Array.from(selectedPaths);
 
@@ -489,6 +503,19 @@ export default function DevPage() {
             {formatBytes(selectedSize)}
           </span>
         </motion.div>
+      )}
+
+      {/* Destructive clean confirmation */}
+      {confirmClean && (
+        <ConfirmDialog
+          title="Clean selected artifacts?"
+          message={`Permanently delete ${selectedPaths.size} item${selectedPaths.size === 1 ? '' : 's'} from your project directories.`}
+          paths={Array.from(selectedPaths)}
+          totalSize={formatBytes(selectedSize)}
+          confirmLabel="Clean"
+          onCancel={() => setConfirmClean(false)}
+          onConfirm={runClean}
+        />
       )}
     </div>
   );
