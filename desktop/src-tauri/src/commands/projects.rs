@@ -50,29 +50,37 @@ pub struct ArchiveStatusResponse {
 /// List all projects from configured project directories (fast, no sizes)
 #[tauri::command]
 pub async fn list_projects() -> Result<Vec<macpurge::ProjectInfo>, String> {
-    let config = macpurge::load_config().map_err(|e| e.to_string())?;
-    let project_dirs = macpurge::get_project_dirs(&config);
+    tokio::task::spawn_blocking(|| {
+        let config = macpurge::load_config().map_err(|e| e.to_string())?;
+        let project_dirs = macpurge::get_project_dirs(&config);
 
-    if project_dirs.is_empty() {
-        return Ok(Vec::new());
-    }
+        if project_dirs.is_empty() {
+            return Ok(Vec::new());
+        }
 
-    let projects = macpurge::ProjectScanner::scan_projects(&project_dirs);
-    Ok(projects)
+        let projects = macpurge::ProjectScanner::scan_projects(&project_dirs);
+        Ok::<_, String>(projects)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// List all projects as a tree structure (groups + standalone projects)
 #[tauri::command]
 pub async fn list_projects_tree() -> Result<Vec<macpurge::ProjectTreeEntry>, String> {
-    let config = macpurge::load_config().map_err(|e| e.to_string())?;
-    let project_dirs = macpurge::get_project_dirs(&config);
+    tokio::task::spawn_blocking(|| {
+        let config = macpurge::load_config().map_err(|e| e.to_string())?;
+        let project_dirs = macpurge::get_project_dirs(&config);
 
-    if project_dirs.is_empty() {
-        return Ok(Vec::new());
-    }
+        if project_dirs.is_empty() {
+            return Ok(Vec::new());
+        }
 
-    let tree = macpurge::ProjectScanner::scan_projects_tree(&project_dirs);
-    Ok(tree)
+        let tree = macpurge::ProjectScanner::scan_projects_tree(&project_dirs);
+        Ok::<_, String>(tree)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -85,59 +93,69 @@ pub struct GroupSizePayload {
 /// Calculate size for a project group folder and emit event
 #[tauri::command]
 pub async fn calculate_group_size(app: AppHandle, path: String) -> Result<(), String> {
-    let path_buf = PathBuf::from(&path);
-    if !path_buf.exists() {
-        return Err("Path does not exist".to_string());
-    }
+    let app = app.clone();
+    tokio::task::spawn_blocking(move || {
+        let path_buf = PathBuf::from(&path);
+        if !path_buf.exists() {
+            return Err("Path does not exist".to_string());
+        }
 
-    let (total_size, _) = macpurge::calculate_dir_size(&path_buf);
+        let (total_size, _) = macpurge::calculate_dir_size(&path_buf);
 
-    // Sum artifact sizes across child projects
-    let mut total_artifact_size: u64 = 0;
-    if let Ok(entries) = std::fs::read_dir(&path_buf) {
-        for entry in entries.flatten() {
-            let child_path = entry.path();
-            if child_path.is_dir() {
-                let project_type = macpurge::ProjectType::detect(&child_path);
-                for artifact_dir in project_type.artifact_dirs() {
-                    let artifact_path = child_path.join(artifact_dir);
-                    if artifact_path.exists() {
-                        let (size, _) = macpurge::calculate_dir_size(&artifact_path);
-                        total_artifact_size += size;
+        // Sum artifact sizes across child projects
+        let mut total_artifact_size: u64 = 0;
+        if let Ok(entries) = std::fs::read_dir(&path_buf) {
+            for entry in entries.flatten() {
+                let child_path = entry.path();
+                if child_path.is_dir() {
+                    let project_type = macpurge::ProjectType::detect(&child_path);
+                    for artifact_dir in project_type.artifact_dirs() {
+                        let artifact_path = child_path.join(artifact_dir);
+                        if artifact_path.exists() {
+                            let (size, _) = macpurge::calculate_dir_size(&artifact_path);
+                            total_artifact_size += size;
+                        }
                     }
                 }
             }
         }
-    }
 
-    let _ = app.emit("group-size-calculated", GroupSizePayload {
-        path,
-        size_bytes: total_size,
-        artifact_size: total_artifact_size,
-    });
+        let _ = app.emit("group-size-calculated", GroupSizePayload {
+            path,
+            size_bytes: total_size,
+            artifact_size: total_artifact_size,
+        });
 
-    Ok(())
+        Ok::<_, String>(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Calculate size for a single project and emit event
 #[tauri::command]
 pub async fn calculate_project_size(app: AppHandle, path: String) -> Result<(), String> {
-    let path_buf = PathBuf::from(&path);
-    if !path_buf.exists() {
-        return Err("Path does not exist".to_string());
-    }
+    let app = app.clone();
+    tokio::task::spawn_blocking(move || {
+        let path_buf = PathBuf::from(&path);
+        if !path_buf.exists() {
+            return Err("Path does not exist".to_string());
+        }
 
-    let (size, artifact_size) = macpurge::ProjectScanner::calculate_project_size(&path_buf);
-    let commit_time = macpurge::ProjectScanner::get_last_commit_time(&path_buf);
+        let (size, artifact_size) = macpurge::ProjectScanner::calculate_project_size(&path_buf);
+        let commit_time = macpurge::ProjectScanner::get_last_commit_time(&path_buf);
 
-    let _ = app.emit("project-size-calculated", ProjectSizePayload {
-        path,
-        size_bytes: size,
-        artifact_size,
-        last_commit_time: commit_time,
-    });
+        let _ = app.emit("project-size-calculated", ProjectSizePayload {
+            path,
+            size_bytes: size,
+            artifact_size,
+            last_commit_time: commit_time,
+        });
 
-    Ok(())
+        Ok::<_, String>(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Archive selected projects to archive_dir with optional artifact cleaning and zip compression
@@ -146,6 +164,8 @@ pub async fn archive_projects(
     app: AppHandle,
     paths: Vec<String>,
 ) -> Result<Vec<String>, String> {
+    let app = app.clone();
+    tokio::task::spawn_blocking(move || {
     let config = macpurge::load_config().map_err(|e| e.to_string())?;
     let archive_dir = config
         .archive_dir
@@ -386,7 +406,10 @@ pub async fn archive_projects(
         }
     }
 
-    Ok(archived)
+    Ok::<_, String>(archived)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// List archived projects from archive_dir manifest
@@ -421,6 +444,8 @@ pub async fn restore_projects(
     app: AppHandle,
     archived_paths: Vec<String>,
 ) -> Result<Vec<String>, String> {
+    let app = app.clone();
+    tokio::task::spawn_blocking(move || {
     let config = macpurge::load_config().map_err(|e| e.to_string())?;
     let archive_dir = config
         .archive_dir
@@ -631,7 +656,10 @@ pub async fn restore_projects(
         }
     }
 
-    Ok(restored)
+    Ok::<_, String>(restored)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Get archive directory status
@@ -740,48 +768,65 @@ pub async fn open_project_in_finder(path: String) -> Result<(), String> {
 /// Check git status for a project and emit event
 #[tauri::command]
 pub async fn check_git_status(app: AppHandle, path: String) -> Result<(), String> {
-    let path_buf = PathBuf::from(&path);
-    if !path_buf.exists() {
-        return Err("Path does not exist".to_string());
-    }
+    let app = app.clone();
+    tokio::task::spawn_blocking(move || {
+        let path_buf = PathBuf::from(&path);
+        if !path_buf.exists() {
+            return Err("Path does not exist".to_string());
+        }
 
-    if let Some(status) = macpurge::ProjectScanner::get_git_status(&path_buf) {
-        let _ = app.emit("project-git-status", GitStatusPayload {
-            path,
-            status,
-        });
-    }
+        if let Some(status) = macpurge::ProjectScanner::get_git_status(&path_buf) {
+            let _ = app.emit("project-git-status", GitStatusPayload {
+                path,
+                status,
+            });
+        }
 
-    Ok(())
+        Ok::<_, String>(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Auto-commit all changes in a project
 #[tauri::command]
 pub async fn auto_commit_project(path: String) -> Result<String, String> {
-    let path_buf = PathBuf::from(&path);
-    macpurge::ProjectScanner::auto_commit(&path_buf).map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(move || {
+        let path_buf = PathBuf::from(&path);
+        macpurge::ProjectScanner::auto_commit(&path_buf).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Push to a specific remote
 #[tauri::command]
 pub async fn push_project(path: String, remote: String) -> Result<(), String> {
-    let path_buf = PathBuf::from(&path);
-    macpurge::ProjectScanner::push_to_remote(&path_buf, &remote).map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(move || {
+        let path_buf = PathBuf::from(&path);
+        macpurge::ProjectScanner::push_to_remote(&path_buf, &remote).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Push to all remotes
 #[tauri::command]
 pub async fn push_project_all(path: String) -> Result<Vec<PushRemoteResult>, String> {
-    let path_buf = PathBuf::from(&path);
-    let results = macpurge::ProjectScanner::push_to_all_remotes(&path_buf)
-        .map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || {
+        let path_buf = PathBuf::from(&path);
+        let results = macpurge::ProjectScanner::push_to_all_remotes(&path_buf)
+            .map_err(|e| e.to_string())?;
 
-    Ok(results
-        .into_iter()
-        .map(|(remote, result)| PushRemoteResult {
-            remote,
-            success: result.is_ok(),
-            error: result.err(),
-        })
-        .collect())
+        Ok::<_, String>(results
+            .into_iter()
+            .map(|(remote, result)| PushRemoteResult {
+                remote,
+                success: result.is_ok(),
+                error: result.err(),
+            })
+            .collect())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }

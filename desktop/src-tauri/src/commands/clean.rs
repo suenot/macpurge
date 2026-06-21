@@ -202,40 +202,44 @@ pub async fn clean_path(app: AppHandle, path: String, dry_run: bool) -> Result<C
 /// Estimate how much space can be freed
 #[tauri::command]
 pub async fn estimate_cleanup(paths: Vec<String>) -> Result<CleanupEstimate, String> {
-    let mut total_bytes: u64 = 0;
-    let mut item_count: usize = 0;
-    let mut by_type: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    tokio::task::spawn_blocking(move || {
+        let mut total_bytes: u64 = 0;
+        let mut item_count: usize = 0;
+        let mut by_type: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
 
-    for path_str in paths {
-        let path = PathBuf::from(&path_str);
-        if !path.exists() {
-            continue;
+        for path_str in paths {
+            let path = PathBuf::from(&path_str);
+            if !path.exists() {
+                continue;
+            }
+
+            let size = macpurge::get_size(&path);
+            total_bytes += size;
+            item_count += 1;
+
+            // Categorize by directory name
+            if let Some(name) = path.file_name() {
+                let key = name.to_string_lossy().to_string();
+                *by_type.entry(key).or_insert(0) += size;
+            }
         }
 
-        let size = macpurge::get_size(&path);
-        total_bytes += size;
-        item_count += 1;
-
-        // Categorize by directory name
-        if let Some(name) = path.file_name() {
-            let key = name.to_string_lossy().to_string();
-            *by_type.entry(key).or_insert(0) += size;
-        }
-    }
-
-    Ok(CleanupEstimate {
-        total_bytes,
-        total_human: format_size(total_bytes),
-        item_count,
-        by_type: by_type
-            .into_iter()
-            .map(|(k, v)| TypeEstimate {
-                artifact_type: k,
-                bytes: v,
-                human: format_size(v),
-            })
-            .collect(),
+        Ok::<_, String>(CleanupEstimate {
+            total_bytes,
+            total_human: format_size(total_bytes),
+            item_count,
+            by_type: by_type
+                .into_iter()
+                .map(|(k, v)| TypeEstimate {
+                    artifact_type: k,
+                    bytes: v,
+                    human: format_size(v),
+                })
+                .collect(),
+        })
     })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn format_size(bytes: u64) -> String {

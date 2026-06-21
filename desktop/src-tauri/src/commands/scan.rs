@@ -6,56 +6,64 @@ use std::path::PathBuf;
 /// Scan project directories from config for dev artifacts
 #[tauri::command]
 pub async fn scan_dev() -> Result<Vec<ScanResult>, String> {
-    let config = macpurge::load_config().map_err(|e| e.to_string())?;
-    let project_dirs = macpurge::get_project_dirs(&config);
+    tokio::task::spawn_blocking(|| {
+        let config = macpurge::load_config().map_err(|e| e.to_string())?;
+        let project_dirs = macpurge::get_project_dirs(&config);
 
-    if project_dirs.is_empty() {
-        return Err("No project directories configured. Add directories in Settings.".to_string());
-    }
+        if project_dirs.is_empty() {
+            return Err("No project directories configured. Add directories in Settings.".to_string());
+        }
 
-    let scanner = DirectoryScanner::new(ScanOptions {
-        dev_mode: true,
-        include_hidden: config.scan.include_hidden,
-        max_depth: Some(config.scan.max_depth),
-        min_size: config.scan.min_size_bytes,
-        show_progress: false,
-    });
+        let scanner = DirectoryScanner::new(ScanOptions {
+            dev_mode: true,
+            include_hidden: config.scan.include_hidden,
+            max_depth: Some(config.scan.max_depth),
+            min_size: config.scan.min_size_bytes,
+            show_progress: false,
+        });
 
-    let mut results = Vec::new();
-    for path in project_dirs {
-        if path.exists() {
-            match scanner.scan(&path) {
-                Ok(result) => results.push(result),
-                Err(e) => {
-                    eprintln!("Failed to scan {}: {}", path.display(), e);
+        let mut results = Vec::new();
+        for path in project_dirs {
+            if path.exists() {
+                match scanner.scan(&path) {
+                    Ok(result) => results.push(result),
+                    Err(e) => {
+                        eprintln!("Failed to scan {}: {}", path.display(), e);
+                    }
                 }
             }
         }
-    }
 
-    Ok(results)
+        Ok::<_, String>(results)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Scan a specific path for dev artifacts
 #[tauri::command]
 pub async fn scan_path(path: String) -> Result<ScanResult, String> {
-    let path = PathBuf::from(&path);
+    tokio::task::spawn_blocking(move || {
+        let path = PathBuf::from(&path);
 
-    if !path.exists() {
-        return Err(format!("Path does not exist: {}", path.display()));
-    }
+        if !path.exists() {
+            return Err(format!("Path does not exist: {}", path.display()));
+        }
 
-    let config = macpurge::load_config().unwrap_or_default();
+        let config = macpurge::load_config().unwrap_or_default();
 
-    let scanner = DirectoryScanner::new(ScanOptions {
-        dev_mode: true,
-        include_hidden: config.scan.include_hidden,
-        max_depth: Some(config.scan.max_depth),
-        min_size: config.scan.min_size_bytes,
-        show_progress: false,
-    });
+        let scanner = DirectoryScanner::new(ScanOptions {
+            dev_mode: true,
+            include_hidden: config.scan.include_hidden,
+            max_depth: Some(config.scan.max_depth),
+            min_size: config.scan.min_size_bytes,
+            show_progress: false,
+        });
 
-    scanner.scan(&path).map_err(|e| e.to_string())
+        scanner.scan(&path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Get list of supported dev artifact types
