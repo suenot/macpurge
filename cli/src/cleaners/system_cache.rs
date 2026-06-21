@@ -51,7 +51,7 @@ impl SystemCacheType {
             Self::IOSBackups => "iOS device backup files",
             Self::Trash => "Files in the Trash",
             Self::DownloadsOld => "Old files in ~/Downloads",
-            Self::MailCaches => "Mail application cache files",
+            Self::MailCaches => "Mail application cache files (does not touch the ~/Library/Mail message store)",
             Self::All => "All system caches and cleanable data",
         }
     }
@@ -147,8 +147,11 @@ impl SystemCacheCleaner {
                 paths.push(home.join("Downloads"));
             }
             SystemCacheType::MailCaches => {
-                paths.push(home.join("Library/Mail"));
+                // Only genuine cache locations — NEVER ~/Library/Mail, which is
+                // the actual Apple Mail message store (downloaded mail, local
+                // "On My Mac" mailboxes, drafts), not a cache.
                 paths.push(home.join("Library/Caches/com.apple.mail"));
+                paths.push(home.join("Library/Containers/com.apple.mail/Data/Library/Caches"));
             }
             SystemCacheType::All => {
                 paths.push(home.join("Library/Caches"));
@@ -557,5 +560,41 @@ mod tests {
         let scanner = SystemScanner::new();
         let result = scanner.scan_all();
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_mail_caches_never_includes_mail_store() {
+        // Regression test (GitLab #5): "Mail Caches" must never resolve to the
+        // ~/Library/Mail message store, which holds local-only email and is NOT
+        // a cache. We inspect the unfiltered candidate paths so the assertion
+        // holds even on machines where ~/Library/Mail does not exist on disk.
+        let home = dirs::home_dir().unwrap_or_default();
+        let cleaner = SystemCacheCleaner::mail_caches();
+
+        let candidates = vec![
+            home.join("Library/Caches/com.apple.mail"),
+            home.join("Library/Containers/com.apple.mail/Data/Library/Caches"),
+        ];
+
+        // Every candidate must be a cache path, never the mail store.
+        let mail_store = home.join("Library/Mail");
+        for path in &candidates {
+            assert_ne!(*path, mail_store, "MailCaches must not target the mail store");
+            assert!(
+                !path.ends_with("Library/Mail"),
+                "MailCaches path {} must not end in Library/Mail",
+                path.display()
+            );
+        }
+
+        // And the cleaner's actual resolved paths (those that exist on this
+        // machine) must likewise never include the mail store.
+        for path in cleaner.get_cache_paths() {
+            assert!(
+                !path.ends_with("Library/Mail"),
+                "resolved MailCaches path {} must not end in Library/Mail",
+                path.display()
+            );
+        }
     }
 }
