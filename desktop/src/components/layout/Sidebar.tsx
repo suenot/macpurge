@@ -17,7 +17,8 @@ import {
   Clock,
   Shield,
   FolderGit2,
-  BrainCircuit
+  BrainCircuit,
+  PieChart
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useEffect, useState } from 'react';
@@ -27,6 +28,7 @@ import { formatBytes } from '@/lib/types';
 
 const navItems = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/disk', label: 'Disk Usage', icon: PieChart },
   { href: '/projects', label: 'Projects', icon: FolderGit2 },
   { href: '/dev', label: 'Dev Artifacts', icon: Code2 },
   { href: '/packages', label: 'Packages', icon: Package },

@@ -494,6 +494,28 @@ export interface ArchiveStatusResponse {
   project_count: number;
 }
 
+// ── Disk usage (sunburst) types ───────────────
+
+export interface UsageNode {
+  name: string;
+  path: string;
+  size_bytes: number;
+  file_count: number;
+  is_dir: boolean;
+  is_symlink: boolean;
+  children: UsageNode[];
+  has_more: boolean;
+  aggregated_count: number | null;
+}
+
+export interface UsageScanProgress {
+  scanned_items: number;
+  current_path: string;
+  bytes_so_far: number;
+  unreadable_count: number;
+  done: boolean;
+}
+
 // ── Git types ────────────────────────────────
 
 export interface GitRemoteStatus {

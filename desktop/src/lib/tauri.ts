@@ -42,6 +42,8 @@ import type {
   GroupSizePayload,
   GitStatusPayload,
   PushRemoteResult,
+  UsageNode,
+  UsageScanProgress,
 } from './types';
 
 // Disk commands
@@ -345,6 +347,35 @@ export async function pushProjectAll(path: string): Promise<PushRemoteResult[]> 
 
 export function onProjectGitStatus(callback: (payload: GitStatusPayload) => void): Promise<UnlistenFn> {
   return listen<GitStatusPayload>('project-git-status', (event) => callback(event.payload));
+}
+
+// Disk usage (sunburst) commands
+export async function scanUsage(path: string, onDisk: boolean): Promise<UsageNode> {
+  return invoke<UsageNode>('scan_usage', { path, onDisk });
+}
+
+export async function getUsageSubtree(path: string): Promise<UsageNode> {
+  return invoke<UsageNode>('get_usage_subtree', { path });
+}
+
+export async function cancelUsageScan(): Promise<boolean> {
+  return invoke<boolean>('cancel_usage_scan');
+}
+
+export async function trashUsageItem(path: string): Promise<number> {
+  return invoke<number>('trash_usage_item', { path });
+}
+
+export async function revealInFinder(path: string): Promise<void> {
+  return invoke('reveal_in_finder', { path });
+}
+
+export async function getHomeDir(): Promise<string> {
+  return invoke<string>('get_home_dir');
+}
+
+export function onUsageScanProgress(callback: (p: UsageScanProgress) => void): Promise<UnlistenFn> {
+  return listen<UsageScanProgress>('usage-scan-progress', (event) => callback(event.payload));
 }
 
 // Helper to check if running in Tauri
