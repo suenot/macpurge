@@ -8,6 +8,32 @@
 use anyhow::{anyhow, Result};
 use std::path::{Path, PathBuf};
 
+/// Return the user's home directory only if it is a usable absolute path.
+///
+/// `dirs::home_dir()` can return `None` (no `$HOME`, unusual environments). The
+/// historical pattern `dirs::home_dir().unwrap_or_default()` turned that `None`
+/// into an empty `PathBuf`, so `home.join("Downloads")` silently became the
+/// **relative** path `Downloads`, which resolves against the process CWD. A
+/// delete derived from it could then target a `Downloads`/`.Trash`/
+/// `Library/Caches` directory under whatever directory the tool happened to be
+/// run from (GitLab #11).
+///
+/// Callers must treat `None` as "build no targets" so that no relative path is
+/// ever produced. The returned path is guaranteed absolute, complementing
+/// [`validate_delete_target`], which canonicalizes and rejects protected roots
+/// but does not catch a relative path that happens to exist under the CWD.
+pub fn home_dir_checked() -> Option<PathBuf> {
+    dirs::home_dir().filter(|h| is_usable_home(h))
+}
+
+/// A home directory is usable only if it is absolute and longer than the
+/// filesystem root, so we never derive delete targets from `/` or a relative
+/// path. Split out from [`home_dir_checked`] so the filter logic is testable
+/// without mutating the process environment.
+fn is_usable_home(home: &Path) -> bool {
+    home.is_absolute() && home.as_os_str().len() > 1
+}
+
 /// Protected absolute roots that must never be deleted (and whose ancestors
 /// must never be deleted either). These are macOS system and top-level user
 /// locations. The user's own home directory is added dynamically in
@@ -187,5 +213,32 @@ mod tests {
         let dir = tempdir().unwrap();
         let missing = dir.path().join("does-not-exist");
         assert!(validate_delete_target(&missing).is_err());
+    }
+
+    #[test]
+    fn is_usable_home_rejects_empty_relative_and_root() {
+        // The exact cases that produced relative delete targets (GitLab #11):
+        // an empty path (from `unwrap_or_default`), a relative path, and the
+        // filesystem root must all be rejected as a usable home.
+        assert!(!is_usable_home(Path::new("")));
+        assert!(!is_usable_home(Path::new("Downloads")));
+        assert!(!is_usable_home(Path::new("some/relative/dir")));
+        assert!(!is_usable_home(Path::new("/")));
+    }
+
+    #[test]
+    fn is_usable_home_accepts_real_absolute_home() {
+        assert!(is_usable_home(Path::new("/Users/example")));
+        assert!(is_usable_home(Path::new("/home/example")));
+    }
+
+    #[test]
+    fn home_dir_checked_is_absolute_when_present() {
+        // On any normal test host `home_dir()` resolves to an absolute path; if
+        // the environment has no home it returns None, which is also acceptable.
+        if let Some(home) = home_dir_checked() {
+            assert!(home.is_absolute());
+            assert!(home.as_os_str().len() > 1);
+        }
     }
 }

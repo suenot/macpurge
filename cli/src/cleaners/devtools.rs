@@ -70,7 +70,12 @@ impl DevToolsCleaner {
     }
 
     fn get_paths(&self) -> Vec<PathBuf> {
-        let home = dirs::home_dir().unwrap_or_default();
+        // No usable absolute home => build no home-derived targets, so a missing
+        // `$HOME` can never produce a relative delete path (GitLab #11).
+        let home = match crate::utils::home_dir_checked() {
+            Some(h) => h,
+            None => return Vec::new(),
+        };
         let mut paths = Vec::new();
 
         match &self.clean_type {

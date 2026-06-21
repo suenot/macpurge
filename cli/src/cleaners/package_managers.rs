@@ -34,7 +34,14 @@ impl PackageManager {
     }
 
     pub fn cache_paths(&self) -> Vec<PathBuf> {
-        let home = dirs::home_dir().unwrap_or_default();
+        // Without a usable absolute home we build no home-derived targets, so a
+        // missing `$HOME` can never yield a relative delete path (GitLab #11).
+        // The few absolute system paths below are unaffected, but they only make
+        // sense alongside the home-derived ones, so we bail entirely.
+        let home = match crate::utils::home_dir_checked() {
+            Some(h) => h,
+            None => return Vec::new(),
+        };
 
         match self {
             PackageManager::Npm => vec![

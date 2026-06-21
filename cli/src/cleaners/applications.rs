@@ -49,11 +49,13 @@ impl ApplicationScanner {
     /// Use `get_app_sizes()` to get data/cache sizes per-app on demand.
     pub fn list_apps() -> Result<Vec<AppInfo>> {
         let mut apps = Vec::new();
-        let home = dirs::home_dir().unwrap_or_default();
-        let app_dirs = vec![
-            PathBuf::from("/Applications"),
-            home.join("Applications"),
-        ];
+        // Always scan the absolute /Applications; add ~/Applications only when a
+        // usable absolute home is available, so a missing `$HOME` never yields a
+        // relative path (GitLab #11).
+        let mut app_dirs = vec![PathBuf::from("/Applications")];
+        if let Some(home) = crate::utils::home_dir_checked() {
+            app_dirs.push(home.join("Applications"));
+        }
 
         for app_dir in app_dirs {
             if !app_dir.exists() {
@@ -138,7 +140,12 @@ impl ApplicationScanner {
     /// This can be slow for apps with large data (e.g. Docker), so it's
     /// designed to be called per-app (not for all apps at once in list_apps).
     pub fn get_app_sizes(app_name: &str, bundle_id: Option<&str>) -> (u64, u64) {
-        let home = dirs::home_dir().unwrap_or_default();
+        // No usable absolute home => no home-derived directories to size, so we
+        // report zero rather than scanning relative paths (GitLab #11).
+        let home = match crate::utils::home_dir_checked() {
+            Some(h) => h,
+            None => return (0, 0),
+        };
         let mut data_size = 0u64;
         let mut cache_size = 0u64;
 
@@ -215,7 +222,13 @@ impl ApplicationScanner {
 
     /// Find remnants of uninstalled applications
     pub fn find_remnants() -> Result<Vec<AppRemnant>> {
-        let home = dirs::home_dir().unwrap_or_default();
+        // Every remnant search directory is home-derived; without a usable
+        // absolute home there is nothing to scan and we return no remnants
+        // rather than scanning relative paths (GitLab #11).
+        let home = match crate::utils::home_dir_checked() {
+            Some(h) => h,
+            None => return Ok(Vec::new()),
+        };
 
         // Get list of currently installed apps and their bundle IDs
         let installed_apps = Self::list_apps()?;
@@ -346,7 +359,6 @@ impl ApplicationScanner {
     /// the app's bundle ID for an exact match and otherwise require a word/path
     /// boundary on the name. Generic or too-short names are rejected outright.
     pub fn find_app_files(app_name: &str) -> Result<Vec<PathBuf>> {
-        let home = dirs::home_dir().unwrap_or_default();
         let mut files = Vec::new();
 
         // Reject names that are too short or generic to match safely. Without a
@@ -358,6 +370,14 @@ impl ApplicationScanner {
                 app_name
             );
         }
+
+        // Every uninstall target below is home-derived; without a usable absolute
+        // home we resolve no files rather than building relative delete paths that
+        // could resolve under the CWD (GitLab #11).
+        let home = match crate::utils::home_dir_checked() {
+            Some(h) => h,
+            None => return Ok(Vec::new()),
+        };
 
         // Main application bundle. Resolve it first so we can read its bundle ID
         // and use that for an exact match against support/cache directories.

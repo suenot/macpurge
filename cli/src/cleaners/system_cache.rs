@@ -112,25 +112,37 @@ impl SystemCacheCleaner {
 
     fn get_cache_paths(&self) -> Vec<PathBuf> {
         let mut paths = Vec::new();
-        let home = dirs::home_dir().unwrap_or_default();
+
+        // Only the SystemCache branch is purely absolute; every other branch
+        // derives targets from the user's home. Without a usable absolute home
+        // we skip all home-derived pushes so a missing `$HOME` can never yield a
+        // relative delete path (GitLab #11). The absolute `/Library/Caches`
+        // entries below are unaffected.
+        let home = crate::utils::home_dir_checked();
 
         match self.cache_type {
             SystemCacheType::UserCache => {
-                paths.push(home.join("Library/Caches"));
+                if let Some(home) = &home {
+                    paths.push(home.join("Library/Caches"));
+                }
             }
             SystemCacheType::SystemCache => {
                 paths.push(PathBuf::from("/Library/Caches"));
                 paths.push(PathBuf::from("/System/Library/Caches"));
             }
             SystemCacheType::BrowserCache => {
-                paths.push(home.join("Library/Caches/Google/Chrome"));
-                paths.push(home.join("Library/Caches/com.apple.Safari"));
-                paths.push(home.join("Library/Caches/Firefox"));
-                paths.push(home.join("Library/Caches/Microsoft Edge"));
-                paths.push(home.join("Library/Caches/BraveSoftware"));
+                if let Some(home) = &home {
+                    paths.push(home.join("Library/Caches/Google/Chrome"));
+                    paths.push(home.join("Library/Caches/com.apple.Safari"));
+                    paths.push(home.join("Library/Caches/Firefox"));
+                    paths.push(home.join("Library/Caches/Microsoft Edge"));
+                    paths.push(home.join("Library/Caches/BraveSoftware"));
+                }
             }
             SystemCacheType::SystemLogs => {
-                paths.push(home.join("Library/Logs"));
+                if let Some(home) = &home {
+                    paths.push(home.join("Library/Logs"));
+                }
                 // /var/log requires sudo — only include if accessible
                 let var_log = PathBuf::from("/var/log");
                 if var_log.exists() {
@@ -138,23 +150,33 @@ impl SystemCacheCleaner {
                 }
             }
             SystemCacheType::IOSBackups => {
-                paths.push(home.join("Library/Application Support/MobileSync/Backup"));
+                if let Some(home) = &home {
+                    paths.push(home.join("Library/Application Support/MobileSync/Backup"));
+                }
             }
             SystemCacheType::Trash => {
-                paths.push(home.join(".Trash"));
+                if let Some(home) = &home {
+                    paths.push(home.join(".Trash"));
+                }
             }
             SystemCacheType::DownloadsOld => {
-                paths.push(home.join("Downloads"));
+                if let Some(home) = &home {
+                    paths.push(home.join("Downloads"));
+                }
             }
             SystemCacheType::MailCaches => {
                 // Only genuine cache locations — NEVER ~/Library/Mail, which is
                 // the actual Apple Mail message store (downloaded mail, local
                 // "On My Mac" mailboxes, drafts), not a cache.
-                paths.push(home.join("Library/Caches/com.apple.mail"));
-                paths.push(home.join("Library/Containers/com.apple.mail/Data/Library/Caches"));
+                if let Some(home) = &home {
+                    paths.push(home.join("Library/Caches/com.apple.mail"));
+                    paths.push(home.join("Library/Containers/com.apple.mail/Data/Library/Caches"));
+                }
             }
             SystemCacheType::All => {
-                paths.push(home.join("Library/Caches"));
+                if let Some(home) = &home {
+                    paths.push(home.join("Library/Caches"));
+                }
                 // Don't include system caches by default (require sudo)
             }
         }
