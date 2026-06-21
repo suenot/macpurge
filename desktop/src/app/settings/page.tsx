@@ -26,6 +26,7 @@ import {
 } from '@/lib/tauri';
 import type { ConfigResponse, ProjectDir, ArchiveStatusResponse, ArchiveConfigResponse } from '@/lib/types';
 import { formatBytes } from '@/lib/types';
+import { toMessage } from '@/lib/errors';
 
 export default function SettingsPage() {
   const [config, setConfig] = useState<ConfigResponse | null>(null);
@@ -52,7 +53,7 @@ export default function SettingsPage() {
         setArchiveStatus(status);
         setArchiveConfig(archCfg);
       } catch (err) {
-        setError(err as string);
+        setError(toMessage(err));
       }
     };
 
@@ -68,7 +69,7 @@ export default function SettingsPage() {
       setSuccess('Setting updated');
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
-      setError(err as string);
+      setError(toMessage(err));
     }
   };
 
@@ -79,7 +80,7 @@ export default function SettingsPage() {
       await saveArchiveConfig(updated);
       setArchiveConfig(updated);
     } catch (err) {
-      setError(err as string);
+      setError(toMessage(err));
     }
   };
 
@@ -97,7 +98,7 @@ export default function SettingsPage() {
       setSuccess('Directory added successfully');
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
-      setError(err as string);
+      setError(toMessage(err));
     } finally {
       setIsAdding(false);
     }
@@ -113,7 +114,7 @@ export default function SettingsPage() {
       setSuccess('Directory removed');
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
-      setError(err as string);
+      setError(toMessage(err));
     }
   };
 
@@ -133,7 +134,7 @@ export default function SettingsPage() {
       setSuccess('Archive directory set');
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
-      setError(err as string);
+      setError(toMessage(err));
     } finally {
       setIsSettingArchive(false);
     }
@@ -150,7 +151,7 @@ export default function SettingsPage() {
       setSuccess('Archive directory cleared');
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
-      setError(err as string);
+      setError(toMessage(err));
     }
   };
 

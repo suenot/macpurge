@@ -60,6 +60,7 @@ import type {
   GroupSizePayload,
 } from '@/lib/types';
 import { formatBytes } from '@/lib/types';
+import { toMessage } from '@/lib/errors';
 import { ProjectRow } from '@/components/ProjectRow';
 
 type SortField = 'last_modified' | 'size' | 'name';
@@ -268,7 +269,7 @@ export default function ProjectsPage() {
       setArchiveStatus(status);
       setArchiveConfig(archCfg);
     } catch (err) {
-      setError(err as string);
+      setError(toMessage(err));
     } finally {
       setIsScanning(false);
     }
@@ -508,7 +509,7 @@ export default function ProjectsPage() {
       setSelectedPaths(new Set());
       await loadProjects();
     } catch (err) {
-      setError(err as string);
+      setError(toMessage(err));
     } finally {
       setIsArchiving(false);
       setArchiveProgress(new Map());
@@ -526,7 +527,7 @@ export default function ProjectsPage() {
       setSelectedPaths(new Set());
       await loadProjects();
     } catch (err) {
-      setError(err as string);
+      setError(toMessage(err));
     } finally {
       setIsArchiving(false);
       setArchiveProgress(new Map());
@@ -545,7 +546,7 @@ export default function ProjectsPage() {
       setTimeout(() => setSuccess(null), 3000);
       checkGitStatus(path).catch(console.error);
     } catch (err) {
-      setError(err as string);
+      setError(toMessage(err));
     } finally {
       setActionLoading(prev => {
         const next = new Map(prev);
@@ -571,7 +572,7 @@ export default function ProjectsPage() {
       }
       checkGitStatus(path).catch(console.error);
     } catch (err) {
-      setError(err as string);
+      setError(toMessage(err));
     } finally {
       setActionLoading(prev => {
         const next = new Map(prev);
@@ -587,7 +588,7 @@ export default function ProjectsPage() {
     try {
       await openProjectInFinder(path);
     } catch (err) {
-      setError(err as string);
+      setError(toMessage(err));
     }
   }, []);
 
@@ -608,7 +609,7 @@ export default function ProjectsPage() {
       setSuccess('Deleted successfully');
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
-      setError(err as string);
+      setError(toMessage(err));
     } finally {
       setActionLoading(prev => {
         const next = new Map(prev);
