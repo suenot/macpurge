@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import { Sidebar } from '@/components/layout/Sidebar';
+import Onboarding from '@/components/Onboarding';
 
 export const metadata: Metadata = {
   title: 'MacPurge',
@@ -21,6 +22,7 @@ export default function RootLayout({
             {children}
           </main>
         </div>
+        <Onboarding />
       </body>
     </html>
   );

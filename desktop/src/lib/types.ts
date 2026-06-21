@@ -80,10 +80,19 @@ export interface ProjectDir {
 export interface ConfigResponse {
   config_path: string;
   project_dirs: ProjectDir[];
+  excluded_dirs: ProjectDir[];
   scan: ScanConfigResponse;
   cleanup: CleanupConfigResponse;
   schedule_enabled: boolean;
   archive_dir: string | null;
+  onboarding_completed: boolean;
+}
+
+// Result of requesting access to a standard macOS folder (Downloads/Desktop/etc).
+export interface FolderAccess {
+  name: string;
+  path: string;
+  accessible: boolean;
 }
 
 export interface ScanConfigResponse {

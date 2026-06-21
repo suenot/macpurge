@@ -12,6 +12,7 @@ import type {
   ArtifactType,
   ConfigResponse,
   ConfigInput,
+  FolderAccess,
   AppInfo,
   AppRemnant,
   AppFilesResult,
@@ -124,12 +125,37 @@ export async function removeProjectDir(path: string): Promise<ConfigResponse> {
   return invoke<ConfigResponse>('remove_project_dir', { path });
 }
 
+export async function addExcludedDir(path: string): Promise<ConfigResponse> {
+  return invoke<ConfigResponse>('add_excluded_dir', { path });
+}
+
+export async function removeExcludedDir(path: string): Promise<ConfigResponse> {
+  return invoke<ConfigResponse>('remove_excluded_dir', { path });
+}
+
+export async function setOnboardingCompleted(value: boolean): Promise<void> {
+  return invoke('set_onboarding_completed', { value });
+}
+
 export async function setArchiveDir(path: string): Promise<ConfigResponse> {
   return invoke<ConfigResponse>('set_archive_dir', { path });
 }
 
 export async function clearArchiveDir(): Promise<ConfigResponse> {
   return invoke<ConfigResponse>('clear_archive_dir');
+}
+
+// Permission commands
+export async function checkFullDiskAccess(): Promise<boolean> {
+  return invoke<boolean>('check_full_disk_access');
+}
+
+export async function openFullDiskAccessSettings(): Promise<void> {
+  return invoke('open_full_disk_access_settings');
+}
+
+export async function requestStandardFolders(): Promise<FolderAccess[]> {
+  return invoke<FolderAccess[]>('request_standard_folders');
 }
 
 // App commands

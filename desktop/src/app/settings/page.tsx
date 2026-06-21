@@ -11,20 +11,29 @@ import {
   Folder,
   Archive,
   HardDrive,
+  Shield,
+  RefreshCw,
+  FolderCheck,
+  Ban,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import {
   getConfig,
   addProjectDir,
   removeProjectDir,
+  addExcludedDir,
+  removeExcludedDir,
   setArchiveDir,
   clearArchiveDir,
   getArchiveStatus,
   getArchiveConfig,
   saveArchiveConfig,
+  checkFullDiskAccess,
+  openFullDiskAccessSettings,
+  requestStandardFolders,
   isTauri
 } from '@/lib/tauri';
-import type { ConfigResponse, ProjectDir, ArchiveStatusResponse, ArchiveConfigResponse } from '@/lib/types';
+import type { ConfigResponse, ProjectDir, ArchiveStatusResponse, ArchiveConfigResponse, FolderAccess } from '@/lib/types';
 import { formatBytes } from '@/lib/types';
 import { toMessage } from '@/lib/errors';
 
@@ -36,6 +45,12 @@ export default function SettingsPage() {
   const [isAdding, setIsAdding] = useState(false);
   const [isSettingArchive, setIsSettingArchive] = useState(false);
   const [archiveConfig, setArchiveConfig] = useState<ArchiveConfigResponse | null>(null);
+  const [newExcludedPath, setNewExcludedPath] = useState('');
+  const [isAddingExcluded, setIsAddingExcluded] = useState(false);
+  const [fdaGranted, setFdaGranted] = useState<boolean | null>(null);
+  const [isCheckingFda, setIsCheckingFda] = useState(false);
+  const [folders, setFolders] = useState<FolderAccess[] | null>(null);
+  const [isRequestingFolders, setIsRequestingFolders] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -55,10 +70,85 @@ export default function SettingsPage() {
       } catch (err) {
         setError(toMessage(err));
       }
+
+      // Permissions: check Full Disk Access separately so a failure here doesn't
+      // block the rest of the settings from loading.
+      try {
+        setFdaGranted(await checkFullDiskAccess());
+      } catch (err) {
+        setError(toMessage(err));
+      }
     };
 
     loadConfig();
   }, []);
+
+  const handleRecheckFda = async () => {
+    setIsCheckingFda(true);
+    setError(null);
+    try {
+      setFdaGranted(await checkFullDiskAccess());
+    } catch (err) {
+      setError(toMessage(err));
+    } finally {
+      setIsCheckingFda(false);
+    }
+  };
+
+  const handleOpenFdaSettings = async () => {
+    setError(null);
+    try {
+      await openFullDiskAccessSettings();
+    } catch (err) {
+      setError(toMessage(err));
+    }
+  };
+
+  const handleRequestFolders = async () => {
+    setIsRequestingFolders(true);
+    setError(null);
+    try {
+      setFolders(await requestStandardFolders());
+    } catch (err) {
+      setError(toMessage(err));
+    } finally {
+      setIsRequestingFolders(false);
+    }
+  };
+
+  const handleAddExcludedDir = async () => {
+    if (!newExcludedPath.trim()) return;
+
+    setIsAddingExcluded(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const cfg = await addExcludedDir(newExcludedPath.trim());
+      setConfig(cfg);
+      setNewExcludedPath('');
+      setSuccess('Excluded folder added');
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      setError(toMessage(err));
+    } finally {
+      setIsAddingExcluded(false);
+    }
+  };
+
+  const handleRemoveExcludedDir = async (path: string) => {
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const cfg = await removeExcludedDir(path);
+      setConfig(cfg);
+      setSuccess('Excluded folder removed');
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      setError(toMessage(err));
+    }
+  };
 
   const handleToggleArchiveSetting = async (key: keyof ArchiveConfigResponse) => {
     if (!archiveConfig) return;
@@ -206,6 +296,105 @@ export default function SettingsPage() {
         </motion.div>
       )}
 
+      {/* Permissions */}
+      <section className="glass-card p-6 rounded-2xl">
+        <h2 className="text-lg font-semibold text-white mb-2">
+          Permissions
+        </h2>
+        <p className="text-sm text-slate-400 mb-6 max-w-2xl">
+          MacPurge needs disk access to scan for reclaimable space. Granting Full Disk Access once
+          avoids repeated macOS prompts.
+        </p>
+
+        {/* Full Disk Access */}
+        <div className="flex items-center justify-between py-3 px-4 rounded-xl bg-white/5 border border-white/5 mb-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <Shield className="w-5 h-5 text-brand-400 flex-shrink-0" />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-slate-200">Full Disk Access</p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {fdaGranted === null
+                  ? 'Checking…'
+                  : fdaGranted
+                    ? 'Granted'
+                    : 'Not granted — scans may miss protected folders'}
+              </p>
+            </div>
+          </div>
+          <span
+            className={clsx(
+              'px-3 py-1 rounded-full text-xs font-semibold border flex-shrink-0',
+              fdaGranted === null
+                ? 'bg-slate-500/10 text-slate-400 border-slate-500/20'
+                : fdaGranted
+                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                  : 'bg-danger-500/10 text-danger-400 border-danger-500/20'
+            )}
+          >
+            {fdaGranted === null ? 'Checking…' : fdaGranted ? '✅ Granted' : '❌ Not granted'}
+          </span>
+        </div>
+
+        <div className="flex flex-wrap gap-3 mb-6">
+          <button
+            onClick={handleOpenFdaSettings}
+            className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl flex items-center gap-2 font-medium transition-all shadow-lg shadow-brand-500/20"
+          >
+            <Shield className="w-4 h-4" />
+            Grant Full Disk Access
+          </button>
+          <button
+            onClick={handleRecheckFda}
+            disabled={isCheckingFda}
+            className={clsx(
+              'px-4 py-2 bg-white/5 hover:bg-white/10 text-white rounded-xl flex items-center gap-2 font-medium transition-all',
+              isCheckingFda && 'opacity-50 cursor-not-allowed'
+            )}
+          >
+            <RefreshCw className={clsx('w-4 h-4', isCheckingFda && 'animate-spin')} />
+            Recheck
+          </button>
+          <button
+            onClick={handleRequestFolders}
+            disabled={isRequestingFolders}
+            className={clsx(
+              'px-4 py-2 bg-white/5 hover:bg-white/10 text-white rounded-xl flex items-center gap-2 font-medium transition-all',
+              isRequestingFolders && 'opacity-50 cursor-not-allowed'
+            )}
+          >
+            <FolderCheck className="w-4 h-4" />
+            Grant access to standard folders
+          </button>
+        </div>
+
+        {folders && folders.length > 0 && (
+          <div className="space-y-2">
+            {folders.map((f) => (
+              <div
+                key={f.path}
+                className="flex items-center justify-between py-2.5 px-4 rounded-xl bg-black/20 border border-white/5"
+              >
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-slate-200">{f.name}</p>
+                  <p className="text-[11px] text-slate-500 font-mono truncate" title={f.path}>
+                    {f.path}
+                  </p>
+                </div>
+                {f.accessible ? (
+                  <span className="flex items-center gap-1 text-emerald-400 text-xs font-medium flex-shrink-0">
+                    <Check className="w-4 h-4" /> Accessible
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 text-danger-400 text-xs font-medium flex-shrink-0">
+                    <X className="w-4 h-4" /> Blocked
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
       {/* Project Directories */}
       <section className="glass-card p-6 rounded-2xl">
         <h2 className="text-lg font-semibold text-white mb-2">
@@ -270,6 +459,78 @@ export default function SettingsPage() {
               </div>
               <button
                 onClick={() => handleRemoveDir(dir.path)}
+                className="p-2 text-slate-500 hover:text-danger-400 hover:bg-danger-500/10 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Excluded Folders */}
+      <section className="glass-card p-6 rounded-2xl">
+        <h2 className="text-lg font-semibold text-white mb-2">
+          Excluded Folders
+        </h2>
+        <p className="text-sm text-slate-400 mb-6 max-w-2xl">
+          Folders here are never scanned by any feature.
+        </p>
+
+        {/* Add New Excluded Folder */}
+        <div className="flex gap-3 mb-6">
+          <input
+            type="text"
+            value={newExcludedPath}
+            onChange={(e) => setNewExcludedPath(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleAddExcludedDir()}
+            placeholder="~/Sensitive"
+            className="flex-1 px-4 py-2.5 rounded-xl border border-white/10 bg-black/20 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-500 transition-all"
+          />
+          <button
+            onClick={handleAddExcludedDir}
+            disabled={isAddingExcluded || !newExcludedPath.trim()}
+            className={clsx(
+              'px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl flex items-center gap-2 font-medium transition-all shadow-lg shadow-brand-500/20',
+              (isAddingExcluded || !newExcludedPath.trim()) && 'opacity-50 cursor-not-allowed grayscale'
+            )}
+          >
+            <FolderPlus className="w-4 h-4" />
+            Add Path
+          </button>
+        </div>
+
+        {/* Excluded Folder List */}
+        <div className="space-y-2">
+          {config?.excluded_dirs.length === 0 && (
+            <div className="p-8 border border-dashed border-white/10 rounded-xl text-center">
+              <Ban className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+              <p className="text-slate-400 text-sm">No excluded folders</p>
+            </div>
+          )}
+          {config?.excluded_dirs.map((dir: ProjectDir) => (
+            <div
+              key={dir.path}
+              className="flex items-center justify-between py-3 px-4 rounded-xl bg-white/5 hover:bg-white/10 border border-transparent hover:border-white/5 transition-all group"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <Ban
+                  className={clsx(
+                    'w-5 h-5 flex-shrink-0 transition-colors',
+                    dir.exists ? 'text-amber-400' : 'text-slate-500'
+                  )}
+                />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-slate-200 truncate group-hover:text-white transition-colors">
+                    {dir.path}
+                  </p>
+                  {!dir.exists && (
+                    <p className="text-xs text-slate-500 mt-0.5">Directory not found on disk</p>
+                  )}
+                </div>
+              </div>
+              <button
+                onClick={() => handleRemoveExcludedDir(dir.path)}
                 className="p-2 text-slate-500 hover:text-danger-400 hover:bg-danger-500/10 rounded-lg transition-all opacity-0 group-hover:opacity-100"
               >
                 <Trash2 className="w-4 h-4" />
