@@ -16,7 +16,7 @@ import {
 import { clsx } from 'clsx';
 import { scanDev, getConfig, isTauri } from '@/lib/tauri';
 import type { ScanResult, ConfigResponse } from '@/lib/types';
-import { formatBytes } from '@/lib/types';
+import { formatBytes, formatBytesParts } from '@/lib/types';
 import Link from 'next/link';
 
 interface CategoryCard {
@@ -167,10 +167,10 @@ export default function Dashboard() {
               <h2 className="text-slate-400 font-medium mb-1">Potential Space to Free</h2>
               <div className="flex items-baseline gap-2">
                 <span className="text-6xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-white to-slate-300 tracking-tight">
-                  {totalSize > 0 ? formatBytes(totalSize).split(' ')[0] : '0'}
+                  {formatBytesParts(totalSize).value}
                 </span>
                 <span className="text-2xl font-semibold text-slate-500">
-                  {totalSize > 0 ? formatBytes(totalSize).split(' ')[1] : 'B'}
+                  {formatBytesParts(totalSize).unit}
                 </span>
               </div>
               <p className="text-sm text-slate-500 mt-2">

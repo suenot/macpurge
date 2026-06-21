@@ -5,7 +5,7 @@ import { Package, Trash2, RefreshCw, AlertCircle, CheckCircle, Info } from 'luci
 import { clsx } from 'clsx';
 import { scanPackages, cleanPackageCache, isTauri } from '@/lib/tauri';
 import type { PackageScanResult, PackageManagerInfo, CachePath } from '@/lib/types';
-import { formatBytes } from '@/lib/types';
+import { formatBytes, formatBytesParts } from '@/lib/types';
 import { motion, AnimatePresence } from 'framer-motion';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useConfirmBeforeDelete } from '@/hooks/useConfirmBeforeDelete';
@@ -67,20 +67,32 @@ export default function PackagesPage() {
     runCleanCache(path);
   };
 
-  const runCleanCache = async (path: string) => {
+  // Clean a single cache without rescanning. Returns true on success so callers
+  // can decide whether a rescan is warranted. Used both for the per-row clean
+  // (which rescans once afterwards) and the batched "Clean Selected" path (which
+  // rescans once after all caches are cleaned, not once per item).
+  const cleanCacheOnly = async (path: string): Promise<boolean> => {
     setCleaning(path);
     try {
       const result = await cleanPackageCache(path, false);
       if (result.success) {
-        // Refresh data after cleaning
-        await fetchData();
-      } else {
-        setError(result.message);
+        return true;
       }
+      setError(result.message);
+      return false;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to clean cache');
+      return false;
     } finally {
       setCleaning(null);
+    }
+  };
+
+  const runCleanCache = async (path: string) => {
+    const ok = await cleanCacheOnly(path);
+    if (ok) {
+      // Refresh data after cleaning
+      await fetchData();
     }
   };
 
@@ -94,8 +106,15 @@ export default function PackagesPage() {
   };
 
   const runCleanSelected = async (paths: string[]) => {
+    // Clean every selected cache first (no rescan per item), then rescan once.
+    let cleanedAny = false;
     for (const path of paths) {
-      await runCleanCache(path);
+      if (await cleanCacheOnly(path)) {
+        cleanedAny = true;
+      }
+    }
+    if (cleanedAny) {
+      await fetchData();
     }
     setSelectedCaches(new Set());
   };
@@ -232,10 +251,10 @@ export default function PackagesPage() {
                 <p className="text-sm text-slate-400 uppercase tracking-wider font-semibold">Total Cache Size</p>
                 <div className="flex items-baseline gap-2 mt-1">
                   <p className="text-4xl font-bold text-white">
-                    {formatBytes(result.total_cache_size).split(' ')[0]}
+                    {formatBytesParts(result.total_cache_size).value}
                   </p>
                   <p className="text-xl text-slate-500 font-medium">
-                    {formatBytes(result.total_cache_size).split(' ')[1]}
+                    {formatBytesParts(result.total_cache_size).unit}
                   </p>
                 </div>
               </div>

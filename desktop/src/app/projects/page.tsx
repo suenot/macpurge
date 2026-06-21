@@ -50,6 +50,7 @@ import type {
   ProjectInfo,
   ProjectType,
   ProjectTreeEntry,
+  ProjectTreeProject,
   ProjectTreeGroup,
   ArchivedProjectEntry,
   ArchiveProgressPayload,
@@ -93,6 +94,13 @@ function relativeTime(timestamp: number | null): string {
   if (diff < 2592000) return `${Math.floor(diff / 86400)}d ago`;
   if (diff < 31536000) return `${Math.floor(diff / 2592000)}mo ago`;
   return `${Math.floor(diff / 31536000)}y ago`;
+}
+
+// A tree "Project" entry carries every ProjectInfo field plus a `kind` tag.
+// Strip the tag to get a plain ProjectInfo, avoiding an unsafe double cast.
+function treeProjectToInfo(p: ProjectTreeProject): ProjectInfo {
+  const { kind: _kind, ...info } = p;
+  return info;
 }
 
 // Helpers to extract fields from tree entries
@@ -235,7 +243,7 @@ export default function ProjectsPage() {
   // Derive flat list of all projects (for size/git scanning)
   const allProjects = useMemo(() => {
     return treeEntries.flatMap(entry =>
-      entry.kind === 'Project' ? [entry as unknown as ProjectInfo] : entry.children
+      entry.kind === 'Project' ? [treeProjectToInfo(entry)] : entry.children
     );
   }, [treeEntries]);
 

@@ -161,7 +161,27 @@ export default function DevPage() {
     const paths = Array.from(selectedPaths);
 
     try {
-      await cleanArtifacts(paths, false);
+      // Event-driven progress (onCleanProgress/onCleanCompleted) is the primary
+      // source of truth. The awaited result is a safety net: if the completion
+      // event never fires, this still clears `isCleaning` and reconciles stats so
+      // the UI doesn't stay stuck "Cleaning in progress...". Guarded against
+      // double-counting by only filling in when the completion event hasn't
+      // already done so.
+      const result = await cleanArtifacts(paths, false);
+      setIsCleaning((stillCleaning) => {
+        if (stillCleaning) {
+          setCurrentlyDeleting(null);
+          setCleanStats((prev) =>
+            prev.removed === 0 && prev.bytesFreed === 0
+              ? { ...prev, removed: result.items_removed, bytesFreed: result.bytes_freed }
+              : prev
+          );
+          if (result.errors.length > 0) {
+            setError(`Completed with ${result.errors.length} error(s)`);
+          }
+        }
+        return false;
+      });
     } catch (err) {
       setError(err as string);
       setIsCleaning(false);
@@ -296,7 +316,7 @@ export default function DevPage() {
                 <motion.div
                   className="h-full bg-brand-500 relative"
                   initial={{ width: 0 }}
-                  animate={{ width: `${(cleanStats.removed / cleanStats.total) * 100}%` }}
+                  animate={{ width: cleanStats.total > 0 ? `${(cleanStats.removed / cleanStats.total) * 100}%` : '0%' }}
                   transition={{ duration: 0.3 }}
                 >
                   <div className="absolute inset-0 bg-white/20 animate-pulse" />

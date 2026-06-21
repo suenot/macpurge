@@ -162,6 +162,13 @@ export function formatBytes(bytes: number | undefined | null): string {
   return `${size.toFixed(unitIndex === 0 ? 0 : 2)} ${units[unitIndex]}`;
 }
 
+// Same value/unit split as formatBytes, returned as separate parts so callers
+// can style the number and unit independently without fragile `.split(' ')`.
+export function formatBytesParts(bytes: number | undefined | null): { value: string; unit: string } {
+  const [value, unit] = formatBytes(bytes).split(' ');
+  return { value, unit };
+}
+
 // Category for dashboard
 export interface Category {
   id: string;
