@@ -132,9 +132,26 @@ pub fn update_tray_title(app: &AppHandle) {
 pub fn start_tray_updater(app: AppHandle) {
     let (tx, rx) = mpsc::channel::<()>();
 
-    // Listen for "disks-changed" events from DiskArbitration watcher
+    // Listen for "disks-changed" events from the DiskArbitration watcher.
+    //
+    // IMPORTANT: this same event name is also emitted by the update loop below
+    // (with reason == "space_update") so the frontend refreshes on periodic
+    // ticks. In Tauri 2, `app.emit` delivers to BOTH the webview AND Rust
+    // `app.listen` listeners, so without a guard the loop's own periodic emit
+    // would re-enter here, push to the channel, trigger another emit, and spin
+    // a CPU core (GitLab #7). We therefore IGNORE our own "space_update" emits
+    // and only react to REAL mount/unmount events (reason == "mounted" /
+    // "unmounted") coming from the disk watcher.
+    //
+    // The payload arrives as a JSON string; DisksChangedPayload only derives
+    // Serialize (it lives in another module), so we do a cheap substring check
+    // on the raw payload instead of pulling in a Deserialize impl.
     let tx_event = tx.clone();
-    app.listen("disks-changed", move |_event| {
+    app.listen("disks-changed", move |event| {
+        if event.payload().contains("space_update") {
+            // Our own periodic refresh emit — do not feed it back into the loop.
+            return;
+        }
         let _ = tx_event.send(());
     });
 
