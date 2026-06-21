@@ -2300,6 +2300,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "toml 0.8.2",
+ "trash",
  "walkdir",
  "which",
  "zip",
