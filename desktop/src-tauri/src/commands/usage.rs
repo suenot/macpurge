@@ -161,6 +161,12 @@ fn prune_node(node: &mut UsageNode, target: &std::path::Path) -> Option<(u64, u6
     None
 }
 
+/// Return the user's home directory, used as the default scan root.
+#[tauri::command]
+pub fn get_home_dir() -> Result<String, String> {
+    std::env::var("HOME").map_err(|_| "HOME is not set".to_string())
+}
+
 /// Reveal a path in Finder (`open -R <path>`).
 #[tauri::command]
 pub fn reveal_in_finder(path: String) -> Result<(), String> {

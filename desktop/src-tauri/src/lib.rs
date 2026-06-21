@@ -110,6 +110,7 @@ pub fn run() {
             commands::usage::cancel_usage_scan,
             commands::usage::trash_usage_item,
             commands::usage::reveal_in_finder,
+            commands::usage::get_home_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running MacPurge");
