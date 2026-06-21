@@ -55,6 +55,13 @@ pub fn run() {
             commands::config::remove_project_dir,
             commands::config::set_archive_dir,
             commands::config::clear_archive_dir,
+            commands::config::add_excluded_dir,
+            commands::config::remove_excluded_dir,
+            commands::config::set_onboarding_completed,
+            // Permission / onboarding commands
+            commands::permissions::check_full_disk_access,
+            commands::permissions::open_full_disk_access_settings,
+            commands::permissions::request_standard_folders,
             commands::apps::list_apps,
             commands::apps::find_app_files,
             commands::apps::find_remnants,

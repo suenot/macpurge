@@ -32,6 +32,14 @@ pub struct Config {
     /// Archive settings
     #[serde(default)]
     pub archive: ArchiveConfig,
+
+    /// Folders that must never be scanned by any feature (global ignore list).
+    #[serde(default)]
+    pub excluded_dirs: Vec<PathBuf>,
+
+    /// Whether the first-launch permissions onboarding has been completed.
+    #[serde(default)]
+    pub onboarding_completed: bool,
 }
 
 /// Scan-related configuration
@@ -272,6 +280,26 @@ pub fn expand_path(path: &PathBuf) -> PathBuf {
 /// Get expanded project directories from config
 pub fn get_project_dirs(config: &Config) -> Vec<PathBuf> {
     config.project_dirs.iter().map(expand_path).collect()
+}
+
+/// Get the expanded global exclude list (folders that must never be scanned).
+pub fn get_excluded_dirs(config: &Config) -> Vec<PathBuf> {
+    config.excluded_dirs.iter().map(expand_path).collect()
+}
+
+/// Returns true if `path` is equal to, or nested inside, any excluded directory.
+/// `excluded` must already be expanded (see [`get_excluded_dirs`]).
+pub fn is_path_excluded(path: &std::path::Path, excluded: &[PathBuf]) -> bool {
+    excluded.iter().any(|ex| path == ex.as_path() || path.starts_with(ex))
+}
+
+/// Convenience: load the config and check whether `path` is excluded. Cheap enough
+/// for command boundaries; for hot scan loops pass a pre-expanded list instead.
+pub fn path_is_globally_excluded(path: &std::path::Path) -> bool {
+    match load_config() {
+        Ok(cfg) => is_path_excluded(path, &get_excluded_dirs(&cfg)),
+        Err(_) => false,
+    }
 }
 
 #[cfg(test)]

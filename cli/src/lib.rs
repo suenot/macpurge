@@ -70,6 +70,7 @@ pub use config::{
     Config, ScanConfig, CleanupConfig, ScheduleConfig, ScheduleTasks, ArchiveConfig,
     get_config_dir, get_config_path, get_history_path, get_schedule_log_path,
     load_config, save_config, init_config, expand_path, get_project_dirs,
+    get_excluded_dirs, is_path_excluded, path_is_globally_excluded,
 };
 
 pub use recipes::{
