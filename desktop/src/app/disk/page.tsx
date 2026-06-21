@@ -1,11 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   PieChart,
   RefreshCw,
   Loader2,
   ChevronRight,
+  ChevronDown,
+  Check,
   FolderOpen,
   Trash2,
   HardDrive,
@@ -49,6 +51,39 @@ export default function DiskPage() {
   const [homeDir, setHomeDir] = useState<string | null>(null);
   const [disks, setDisks] = useState<DiskInfo[]>([]);
   const [scanRoot, setScanRoot] = useState<string | null>(null);
+
+  // Custom target dropdown (replaces the unstyled native <select>).
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) setPickerOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPickerOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [pickerOpen]);
+
+  // Available scan targets: the user's home plus mounted disks.
+  const targets = useMemo(
+    () => [
+      ...(homeDir ? [{ value: homeDir, label: `Home (${homeDir})`, icon: Home }] : []),
+      ...disks.map((d) => ({
+        value: d.mount_point,
+        label: `${d.name} (${d.mount_point})`,
+        icon: HardDrive,
+      })),
+    ],
+    [homeDir, disks],
+  );
+  const selectedTarget = targets.find((t) => t.value === scanRoot);
 
   // Scan progress.
   const [progress, setProgress] = useState<UsageScanProgress | null>(null);
@@ -208,21 +243,66 @@ export default function DiskPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Scan target selector */}
-          <select
-            value={scanRoot ?? ''}
-            onChange={(e) => setScanRoot(e.target.value)}
-            disabled={phase === 'scanning'}
-            className="px-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-sm text-white focus:outline-none focus:ring-2 focus:ring-brand-500/40 disabled:opacity-50"
-          >
-            {homeDir && <option value={homeDir}>Home ({homeDir})</option>}
-            {disks.map((d) => (
-              <option key={d.mount_point} value={d.mount_point}>
-                {d.name} ({d.mount_point})
-              </option>
-            ))}
-            {!homeDir && disks.length === 0 && <option value="">No targets</option>}
-          </select>
+          {/* Scan target selector — custom dropdown, matches the Scan button height */}
+          <div ref={pickerRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setPickerOpen((o) => !o)}
+              disabled={phase === 'scanning'}
+              className="flex items-center gap-2 pl-3 pr-2.5 py-2.5 min-w-[220px] rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-sm text-white focus:outline-none focus:ring-2 focus:ring-brand-500/40 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {(() => {
+                const SelectedIcon = selectedTarget?.icon ?? HardDrive;
+                return <SelectedIcon className="w-4 h-4 text-slate-400 shrink-0" />;
+              })()}
+              <span className="truncate flex-1 text-left">
+                {selectedTarget ? selectedTarget.label : 'Select target'}
+              </span>
+              <ChevronDown
+                className={clsx(
+                  'w-4 h-4 text-slate-400 shrink-0 transition-transform',
+                  pickerOpen && 'rotate-180',
+                )}
+              />
+            </button>
+
+            {pickerOpen && (
+              <div className="absolute right-0 mt-2 w-72 max-h-72 overflow-y-auto custom-scrollbar glass-card rounded-xl border border-white/10 p-1.5 z-30 shadow-2xl shadow-black/40">
+                {targets.length === 0 && (
+                  <div className="px-3 py-2 text-sm text-slate-500">No targets available</div>
+                )}
+                {targets.map((t) => {
+                  const Icon = t.icon;
+                  const active = t.value === scanRoot;
+                  return (
+                    <button
+                      key={t.value}
+                      type="button"
+                      onClick={() => {
+                        setScanRoot(t.value);
+                        setPickerOpen(false);
+                      }}
+                      className={clsx(
+                        'w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left transition-colors',
+                        active
+                          ? 'bg-brand-500/15 text-white'
+                          : 'text-slate-300 hover:bg-white/5 hover:text-white',
+                      )}
+                    >
+                      <Icon
+                        className={clsx(
+                          'w-4 h-4 shrink-0',
+                          active ? 'text-brand-400' : 'text-slate-400',
+                        )}
+                      />
+                      <span className="truncate flex-1">{t.label}</span>
+                      {active && <Check className="w-4 h-4 text-brand-400 shrink-0" />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
 
           <button
             onClick={handleScan}
