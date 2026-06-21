@@ -421,13 +421,7 @@ impl ApplicationScanner {
             }
 
             if !options.dry_run {
-                let remove_result = if path.is_dir() {
-                    fs::remove_dir_all(&path)
-                } else {
-                    fs::remove_file(&path)
-                };
-
-                match remove_result {
+                match super::remove_path(&path, false, options.use_trash) {
                     Ok(_) => {
                         result.items_removed += 1;
                         result.bytes_freed += size;
@@ -504,13 +498,7 @@ pub fn clean_app_remnants(app_name: &str, options: &CleanOptions) -> Result<Clea
                 }
 
                 if !options.dry_run {
-                    let remove_result = if path.is_dir() {
-                        fs::remove_dir_all(&path)
-                    } else {
-                        fs::remove_file(&path)
-                    };
-
-                    match remove_result {
+                    match super::remove_path(&path, false, options.use_trash) {
                         Ok(_) => {
                             result.items_removed += 1;
                             result.bytes_freed += size;

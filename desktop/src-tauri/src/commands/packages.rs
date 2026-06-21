@@ -71,7 +71,12 @@ pub fn clean_package_cache(path: String, dry_run: bool) -> Result<CleanCacheResu
         });
     }
 
-    match macpurge::remove_path(&cache_path, false) {
+    // Honor the configured deletion mode (move to Trash vs. permanent delete).
+    let use_trash = macpurge::load_config()
+        .map(|c| c.cleanup.use_trash)
+        .unwrap_or(true);
+
+    match macpurge::remove_path(&cache_path, false, use_trash) {
         Ok(bytes) => Ok(CleanCacheResult {
             path,
             bytes_freed: bytes,

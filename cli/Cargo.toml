@@ -26,6 +26,9 @@ toml = "0.8"
 which = "6.0"
 zip = "2.2"
 
+# Move files to the macOS Trash (reversible deletes) instead of hard-deleting
+trash = "5"
+
 [dev-dependencies]
 tempfile = "3"
 

@@ -130,7 +130,7 @@ impl Cleaner for DevArtifactsCleaner {
             }
 
             if !options.dry_run {
-                match std::fs::remove_dir_all(&entry.path) {
+                match super::remove_path(&entry.path, false, options.use_trash) {
                     Ok(_) => {
                         result.items_removed += 1;
                         result.bytes_freed += entry.size_bytes;

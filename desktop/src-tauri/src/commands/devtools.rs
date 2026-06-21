@@ -30,10 +30,15 @@ pub fn scan_devtool(tool: String) -> Result<DevToolInfo, String> {
 
 #[tauri::command]
 pub fn clean_devtool_cache(path: String, dry_run: bool) -> Result<CleanResult, String> {
+    // Honor the configured deletion mode (move to Trash vs. permanent delete).
+    let use_trash = macpurge::load_config()
+        .map(|c| c.cleanup.use_trash)
+        .unwrap_or(true);
     let options = CleanOptions {
         dry_run,
         force: true,
         verbose: false,
+        use_trash,
         ..Default::default()
     };
 

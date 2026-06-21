@@ -340,13 +340,7 @@ impl Cleaner for SystemCacheCleaner {
             }
 
             if !options.dry_run {
-                let remove_result = if path.is_dir() {
-                    std::fs::remove_dir_all(&path)
-                } else {
-                    std::fs::remove_file(&path)
-                };
-
-                match remove_result {
+                match super::remove_path(&path, false, options.use_trash) {
                     Ok(_) => {
                         result.items_removed += 1;
                         result.bytes_freed += size;

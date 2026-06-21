@@ -229,6 +229,7 @@ pub fn run_scheduled_tasks() -> Result<ScheduleRunResult> {
         dry_run: false,
         force: true,
         verbose: false,
+        use_trash: cfg.cleanup.use_trash,
         ..Default::default()
     };
 

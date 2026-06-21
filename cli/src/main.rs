@@ -655,6 +655,12 @@ fn cmd_scan(
 }
 
 fn cmd_clean(target: CleanTarget) -> Result<()> {
+    // Honor the configured deletion mode (move to Trash vs. permanent delete).
+    // Default to the safe, reversible behavior if the config can't be read.
+    let use_trash = macpurge::load_config()
+        .map(|c| c.cleanup.use_trash)
+        .unwrap_or(true);
+
     match target {
         CleanTarget::NodeModules {
             path,
@@ -666,6 +672,7 @@ fn cmd_clean(target: CleanTarget) -> Result<()> {
                 dry_run,
                 force: yes,
                 verbose,
+                use_trash,
                 ..Default::default()
             };
 
@@ -700,6 +707,7 @@ fn cmd_clean(target: CleanTarget) -> Result<()> {
                 dry_run,
                 force: yes,
                 verbose,
+                use_trash,
                 ..Default::default()
             };
 
@@ -734,6 +742,7 @@ fn cmd_clean(target: CleanTarget) -> Result<()> {
                 dry_run,
                 force: yes,
                 verbose,
+                use_trash,
                 ..Default::default()
             };
 
@@ -767,6 +776,7 @@ fn cmd_clean(target: CleanTarget) -> Result<()> {
                 dry_run,
                 force: yes,
                 verbose,
+                use_trash,
                 ..Default::default()
             };
 
@@ -800,6 +810,7 @@ fn cmd_clean(target: CleanTarget) -> Result<()> {
                 dry_run,
                 force: yes,
                 verbose,
+                use_trash,
                 ..Default::default()
             };
 
@@ -833,6 +844,7 @@ fn cmd_clean(target: CleanTarget) -> Result<()> {
                 dry_run,
                 force: yes,
                 verbose,
+                use_trash,
                 ..Default::default()
             };
 
@@ -866,6 +878,7 @@ fn cmd_clean(target: CleanTarget) -> Result<()> {
                 dry_run,
                 force: yes,
                 verbose,
+                use_trash,
                 ..Default::default()
             };
 
@@ -900,6 +913,7 @@ fn cmd_clean(target: CleanTarget) -> Result<()> {
                 dry_run,
                 force: yes,
                 verbose,
+                use_trash,
                 ..Default::default()
             };
 
@@ -933,6 +947,7 @@ fn cmd_clean(target: CleanTarget) -> Result<()> {
                 dry_run,
                 force: yes,
                 verbose,
+                use_trash,
                 ..Default::default()
             };
 
@@ -960,16 +975,16 @@ fn cmd_clean(target: CleanTarget) -> Result<()> {
         }
 
         CleanTarget::Logs { dry_run, yes, verbose } => {
-            clean_target_simple("system logs", SystemCacheCleaner::system_logs(), dry_run, yes, verbose)?;
+            clean_target_simple("system logs", SystemCacheCleaner::system_logs(), dry_run, yes, verbose, use_trash)?;
         }
 
         CleanTarget::IosBackups { dry_run, yes, verbose } => {
             warn("Deleting iOS backups is irreversible. Make sure you don't need them.");
-            clean_target_simple("iOS backups", SystemCacheCleaner::ios_backups(), dry_run, yes, verbose)?;
+            clean_target_simple("iOS backups", SystemCacheCleaner::ios_backups(), dry_run, yes, verbose, use_trash)?;
         }
 
         CleanTarget::Trash { dry_run, yes, verbose } => {
-            clean_target_simple("Trash", SystemCacheCleaner::trash(), dry_run, yes, verbose)?;
+            clean_target_simple("Trash", SystemCacheCleaner::trash(), dry_run, yes, verbose, use_trash)?;
         }
 
         CleanTarget::Downloads { older_than, dry_run, yes, verbose } => {
@@ -978,6 +993,7 @@ fn cmd_clean(target: CleanTarget) -> Result<()> {
                 force: yes,
                 verbose,
                 min_age_days: Some(older_than),
+                use_trash,
             };
 
             let cleaner = SystemCacheCleaner::downloads_old();
@@ -1004,7 +1020,7 @@ fn cmd_clean(target: CleanTarget) -> Result<()> {
         }
 
         CleanTarget::Mail { dry_run, yes, verbose } => {
-            clean_target_simple("mail caches", SystemCacheCleaner::mail_caches(), dry_run, yes, verbose)?;
+            clean_target_simple("mail caches", SystemCacheCleaner::mail_caches(), dry_run, yes, verbose, use_trash)?;
         }
 
         CleanTarget::Xcode { what, dry_run, yes, verbose } => {
@@ -1016,7 +1032,7 @@ fn cmd_clean(target: CleanTarget) -> Result<()> {
                 "cache" => DevToolsCleaner::xcode_cache(),
                 "all" => {
                     // Clean all Xcode caches
-                    let options = CleanOptions { dry_run, force: yes, verbose, ..Default::default() };
+                    let options = CleanOptions { dry_run, force: yes, verbose, use_trash, ..Default::default() };
                     let mut total = CleanResult::new();
                     for c in [
                         DevToolsCleaner::xcode_derived_data(),
@@ -1038,11 +1054,11 @@ fn cmd_clean(target: CleanTarget) -> Result<()> {
                     return Ok(());
                 }
             };
-            clean_target_simple(&format!("Xcode {}", what), cleaner, dry_run, yes, verbose)?;
+            clean_target_simple(&format!("Xcode {}", what), cleaner, dry_run, yes, verbose, use_trash)?;
         }
 
         CleanTarget::Docker { dry_run, yes, verbose } => {
-            let options = CleanOptions { dry_run, force: yes, verbose, ..Default::default() };
+            let options = CleanOptions { dry_run, force: yes, verbose, use_trash, ..Default::default() };
             if !yes && !dry_run && !confirm("Run docker system prune?") {
                 println!("Aborted.");
                 return Ok(());
@@ -1052,7 +1068,7 @@ fn cmd_clean(target: CleanTarget) -> Result<()> {
         }
 
         CleanTarget::Gradle { dry_run, yes, verbose } => {
-            clean_target_simple("Gradle cache", DevToolsCleaner::gradle_cache(), dry_run, yes, verbose)?;
+            clean_target_simple("Gradle cache", DevToolsCleaner::gradle_cache(), dry_run, yes, verbose, use_trash)?;
         }
     }
 
@@ -1066,11 +1082,13 @@ fn clean_target_simple(
     dry_run: bool,
     yes: bool,
     verbose: bool,
+    use_trash: bool,
 ) -> Result<()> {
     let options = CleanOptions {
         dry_run,
         force: yes,
         verbose,
+        use_trash,
         ..Default::default()
     };
 
@@ -1133,6 +1151,11 @@ fn cmd_ask(question: &str) -> Result<()> {
 }
 
 fn cmd_apps(action: AppsAction) -> Result<()> {
+    // Honor the configured deletion mode (move to Trash vs. permanent delete).
+    let use_trash = macpurge::load_config()
+        .map(|c| c.cleanup.use_trash)
+        .unwrap_or(true);
+
     match action {
         AppsAction::List => {
             info("Scanning installed applications...");
@@ -1156,6 +1179,7 @@ fn cmd_apps(action: AppsAction) -> Result<()> {
                 dry_run,
                 force: yes,
                 verbose,
+                use_trash,
                 ..Default::default()
             };
 
@@ -1642,10 +1666,14 @@ fn cmd_recipe(action: RecipeCommand) -> Result<()> {
         }
 
         RecipeCommand::Run { id, dry_run, yes } => {
+            let use_trash = macpurge::load_config()
+                .map(|c| c.cleanup.use_trash)
+                .unwrap_or(true);
             let options = CleanOptions {
                 dry_run,
                 force: yes,
                 verbose: true,
+                use_trash,
                 ..Default::default()
             };
 

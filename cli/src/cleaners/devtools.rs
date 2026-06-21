@@ -160,7 +160,7 @@ impl Cleaner for DevToolsCleaner {
             }
 
             if !options.dry_run {
-                match std::fs::remove_dir_all(&path) {
+                match super::remove_path(&path, false, options.use_trash) {
                     Ok(_) => {
                         result.items_removed += 1;
                         result.bytes_freed += size;

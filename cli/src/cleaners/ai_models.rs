@@ -61,13 +61,7 @@ impl Cleaner for AiModelCleaner {
             return Ok(result);
         }
 
-        let removal = if self.path.is_dir() {
-            std::fs::remove_dir_all(&self.path)
-        } else {
-            std::fs::remove_file(&self.path)
-        };
-
-        match removal {
+        match super::remove_path(&self.path, false, options.use_trash) {
             Ok(_) => {
                 result.items_removed += 1;
                 result.bytes_freed += size;

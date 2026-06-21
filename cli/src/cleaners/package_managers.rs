@@ -232,7 +232,7 @@ impl Cleaner for PackageManagerCleaner {
                 }
 
                 if !options.dry_run {
-                    match std::fs::remove_dir_all(&cache_path) {
+                    match super::remove_path(&cache_path, false, options.use_trash) {
                         Ok(_) => {
                             result.items_removed += 1;
                             result.bytes_freed += size;

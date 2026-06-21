@@ -3,8 +3,7 @@
 use macpurge::CleanResult;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 // Global cancellation flag
 static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -70,6 +69,12 @@ pub async fn clean_artifacts(
 
     let mut total_result = CleanResult::default();
 
+    // Honor the configured deletion mode (move to Trash vs. permanent delete).
+    // Default to the safe, reversible behavior if the config can't be read.
+    let use_trash = macpurge::load_config()
+        .map(|c| c.cleanup.use_trash)
+        .unwrap_or(true);
+
     for (index, path_str) in paths.iter().enumerate() {
         // Check for cancellation
         if CANCEL_REQUESTED.load(Ordering::SeqCst) {
@@ -115,10 +120,7 @@ pub async fn clean_artifacts(
             continue;
         }
 
-        // Get size before deletion
-        let size_before = macpurge::get_size(&path);
-
-        match macpurge::remove_path(&path, dry_run) {
+        match macpurge::remove_path(&path, dry_run, use_trash) {
             Ok(bytes) => {
                 total_result.items_removed += 1;
                 total_result.bytes_freed += bytes;

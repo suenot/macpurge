@@ -14,7 +14,7 @@ pub use ai_models::*;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Result of a cleaning operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,12 +54,28 @@ impl Default for CleanResult {
 }
 
 /// Options for cleaning operations
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct CleanOptions {
     pub dry_run: bool,
     pub force: bool,
     pub verbose: bool,
     pub min_age_days: Option<u64>,
+    /// Move deleted paths to the macOS Trash (reversible) instead of permanently deleting them.
+    pub use_trash: bool,
+}
+
+impl Default for CleanOptions {
+    fn default() -> Self {
+        Self {
+            dry_run: false,
+            force: false,
+            verbose: false,
+            min_age_days: None,
+            // Default to the safe, reversible behavior so callers that don't
+            // explicitly opt out never hard-delete user data.
+            use_trash: true,
+        }
+    }
 }
 
 /// Trait for cleaners
@@ -70,15 +86,22 @@ pub trait Cleaner {
     fn estimate(&self) -> Result<u64>;
 }
 
-/// Remove a file or directory
-pub fn remove_path(path: &PathBuf, dry_run: bool) -> Result<u64> {
+/// Remove a file or directory.
+///
+/// When `dry_run` is set nothing is deleted and only the size is returned.
+/// When `use_trash` is set the path is moved to the macOS Trash (reversible)
+/// via the `trash` crate; otherwise it is permanently deleted.
+pub fn remove_path(path: &Path, dry_run: bool, use_trash: bool) -> Result<u64> {
     let size = crate::scanner::get_size(path);
 
     if dry_run {
         return Ok(size);
     }
 
-    if path.is_dir() {
+    if use_trash {
+        trash::delete(path)
+            .map_err(|e| anyhow::anyhow!("Failed to move {} to Trash: {}", path.display(), e))?;
+    } else if path.is_dir() {
         std::fs::remove_dir_all(path)?;
     } else {
         std::fs::remove_file(path)?;
