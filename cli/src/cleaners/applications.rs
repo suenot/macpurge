@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
 
 use super::{CleanOptions, CleanResult};
 use crate::scanner::{calculate_dir_size, calculate_dir_size_on_disk};
@@ -339,19 +338,40 @@ impl ApplicationScanner {
         Ok(remnants)
     }
 
-    /// Find all files related to an application
+    /// Find all files related to an application.
+    ///
+    /// Matching is intentionally conservative to avoid the data-loss class of
+    /// bug where a short/common name (e.g. "go", "code", "chat") matched
+    /// unrelated apps' data via a loose substring test (GitLab #13). We prefer
+    /// the app's bundle ID for an exact match and otherwise require a word/path
+    /// boundary on the name. Generic or too-short names are rejected outright.
     pub fn find_app_files(app_name: &str) -> Result<Vec<PathBuf>> {
         let home = dirs::home_dir().unwrap_or_default();
         let mut files = Vec::new();
 
-        // Main application
+        // Reject names that are too short or generic to match safely. Without a
+        // boundary these would sweep up unrelated directories.
+        if !is_safe_app_name(app_name) {
+            anyhow::bail!(
+                "Application name '{}' is too short or generic to uninstall safely. \
+                 Please use the application's full name.",
+                app_name
+            );
+        }
+
+        // Main application bundle. Resolve it first so we can read its bundle ID
+        // and use that for an exact match against support/cache directories.
         let app_paths = vec![
             PathBuf::from("/Applications").join(format!("{}.app", app_name)),
             home.join("Applications").join(format!("{}.app", app_name)),
         ];
 
+        let mut bundle_id: Option<String> = None;
         for path in app_paths {
             if path.exists() {
+                if bundle_id.is_none() {
+                    bundle_id = Self::get_app_info(&path).0;
+                }
                 files.push(path);
             }
         }
@@ -366,25 +386,21 @@ impl ApplicationScanner {
             home.join("Library/Logs"),
         ];
 
-        let name_lower = app_name.to_lowercase();
-
         for search_dir in search_dirs {
             if !search_dir.exists() {
                 continue;
             }
 
-            for entry in WalkDir::new(&search_dir)
-                .max_depth(2)
-                .into_iter()
-                .filter_map(|e| e.ok())
-            {
-                let entry_name = entry
-                    .file_name()
-                    .to_string_lossy()
-                    .to_lowercase();
-
-                if entry_name.contains(&name_lower) {
-                    files.push(entry.path().to_path_buf());
+            // Only inspect direct children of each support directory. The entry
+            // name is the unit we match on (an app's data lives under a single
+            // top-level dir/file named after the app or its bundle ID), so a
+            // deeper walk only risks matching unrelated nested paths.
+            if let Ok(entries) = fs::read_dir(&search_dir) {
+                for entry in entries.flatten() {
+                    let entry_name = entry.file_name().to_string_lossy().to_string();
+                    if app_entry_matches(&entry_name, app_name, bundle_id.as_deref()) {
+                        files.push(entry.path());
+                    }
                 }
             }
         }
@@ -392,19 +408,25 @@ impl ApplicationScanner {
         Ok(files)
     }
 
-    /// Uninstall an application completely
-    pub fn uninstall_app(app_name: &str, options: &CleanOptions) -> Result<CleanResult> {
-        let files = Self::find_app_files(app_name)?;
+    /// Uninstall an application, deleting the exact list of paths previously
+    /// found and confirmed.
+    ///
+    /// The caller passes the list produced by [`find_app_files`] so we delete
+    /// precisely what was shown and confirmed — avoiding the TOCTOU window where
+    /// a second scan at delete time could pick up different (or newly created)
+    /// paths than the user approved.
+    pub fn uninstall_app(files: &[PathBuf], options: &CleanOptions) -> Result<CleanResult> {
         let mut result = CleanResult::new();
 
         if files.is_empty() {
             result
                 .errors
-                .push(format!("No files found for application: {}", app_name));
+                .push("No files provided to uninstall".to_string());
             return Ok(result);
         }
 
         for path in files {
+            let path = path.clone();
             let size = if path.is_dir() {
                 calculate_dir_size(&path).0
             } else {
@@ -444,6 +466,85 @@ impl ApplicationScanner {
     }
 }
 
+/// Whether an app name is specific enough to match against data directories
+/// without risking false positives. Names shorter than three characters or in a
+/// short list of generic words are rejected, because without a boundary check
+/// they would match unrelated directories (e.g. "go" inside "google-chrome").
+fn is_safe_app_name(app_name: &str) -> bool {
+    let trimmed = app_name.trim();
+    if trimmed.chars().count() < 3 {
+        return false;
+    }
+
+    // Obviously-generic names that, even with boundary matching, are too likely
+    // to collide with shared/system directories or many apps at once.
+    const GENERIC_NAMES: &[&str] = &[
+        "app", "apps", "data", "cache", "caches", "log", "logs", "tmp", "temp",
+        "support", "library", "user", "users", "shared", "common", "default",
+    ];
+    let lower = trimmed.to_lowercase();
+    if GENERIC_NAMES.contains(&lower.as_str()) {
+        return false;
+    }
+
+    true
+}
+
+/// Decide whether a support/cache directory entry belongs to the given app.
+///
+/// Matching rules (all case-insensitive), in order of preference:
+/// 1. Bundle ID (when known): the entry equals the bundle ID exactly, or is a
+///    child namespace of it (`<bundle_id>.`), or a group container
+///    (`group.<bundle_id>` / `group.<bundle_id>.`). This is the most reliable
+///    signal and is exact rather than substring.
+/// 2. App name with a word/path boundary: the entry name with its extension
+///    stripped equals the app name, or the entry begins with `<app_name>` *and*
+///    the following character is a recognised separator (space, `-`, `_`, `.`).
+///
+/// We deliberately do NOT match when the app name is merely contained inside a
+/// longer word (the GitLab #13 data-loss bug), so "go" never matches
+/// "google-chrome" and "code" never matches "vscode-insiders".
+fn app_entry_matches(entry_name: &str, app_name: &str, bundle_id: Option<&str>) -> bool {
+    let entry_lower = entry_name.to_lowercase();
+
+    // 1. Bundle ID (exact / namespaced / group container).
+    if let Some(bid) = bundle_id {
+        let bid_lower = bid.to_lowercase();
+        if !bid_lower.is_empty()
+            && (entry_lower == bid_lower
+                || entry_lower.starts_with(&format!("{}.", bid_lower))
+                || entry_lower == format!("group.{}", bid_lower)
+                || entry_lower.starts_with(&format!("group.{}.", bid_lower)))
+        {
+            return true;
+        }
+    }
+
+    // 2. App name with a boundary. Strip a single trailing extension so e.g.
+    // "MyApp.plist" / "MyApp.savedState" match the bare app name.
+    let name_lower = app_name.to_lowercase();
+    let stem_lower = match entry_lower.rsplit_once('.') {
+        Some((stem, _ext)) => stem,
+        None => entry_lower.as_str(),
+    };
+
+    if stem_lower == name_lower {
+        return true;
+    }
+
+    // Begins with the app name followed by a separator that marks a boundary, so
+    // the name is a whole token rather than a prefix of a longer word.
+    if let Some(rest) = entry_lower.strip_prefix(&name_lower) {
+        if let Some(next) = rest.chars().next() {
+            if matches!(next, ' ' | '-' | '_' | '.') {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// Check if a directory name is a system directory that should not be considered a remnant
 fn is_system_directory(name: &str) -> bool {
     let system_dirs = [
@@ -477,10 +578,20 @@ pub fn clean_app_remnants(app_name: &str, options: &CleanOptions) -> Result<Clea
     let remnants = ApplicationScanner::find_remnants()?;
     let mut result = CleanResult::new();
 
-    let name_lower = app_name.to_lowercase();
+    // Reject names too short/generic to match safely (GitLab #13). Without this
+    // a name like "go" would sweep up unrelated remnants.
+    if !is_safe_app_name(app_name) {
+        anyhow::bail!(
+            "Application name '{}' is too short or generic to clean remnants safely.",
+            app_name
+        );
+    }
 
     for remnant in remnants {
-        if remnant.app_name.to_lowercase().contains(&name_lower) {
+        // Use the same boundary-aware matcher as uninstall. A remnant's
+        // `app_name` is the directory/bundle-id name; match it as a unit rather
+        // than by loose substring containment.
+        if app_entry_matches(&remnant.app_name, app_name, None) {
             for path in remnant.paths {
                 let size = if path.is_dir() {
                     calculate_dir_size(&path).0
@@ -539,5 +650,71 @@ mod tests {
         assert!(is_system_directory("Apple"));
         assert!(is_system_directory("Safari"));
         assert!(!is_system_directory("SomeRandomApp"));
+    }
+
+    /// Regression test for GitLab #13: a short app name must not match unrelated
+    /// data directories via substring, but must still match its own exact-name
+    /// directory.
+    #[test]
+    fn test_app_entry_matches_short_name_no_false_positive() {
+        // "go" must NOT match unrelated apps' data dirs that merely contain it.
+        assert!(!app_entry_matches("google-chrome", "go", None));
+        assert!(!app_entry_matches("GoogleChrome", "Go", None));
+        assert!(!app_entry_matches("org.golang.tools", "go", None));
+
+        // But it MUST match the intended app's exact-name dir (boundary present).
+        assert!(app_entry_matches("Go", "Go", None));
+        assert!(app_entry_matches("go", "go", None));
+        assert!(app_entry_matches("Go.plist", "Go", None));
+        assert!(app_entry_matches("Go-helper", "Go", None));
+    }
+
+    #[test]
+    fn test_app_entry_matches_boundary_required() {
+        // Substring inside a longer word must not match.
+        assert!(!app_entry_matches("vscode-insiders", "code", None));
+        assert!(!app_entry_matches("notepad-plus", "note", None));
+
+        // Whole-token / separator boundary matches are accepted.
+        assert!(app_entry_matches("Code", "Code", None));
+        assert!(app_entry_matches("Code.savedState", "Code", None));
+        assert!(app_entry_matches("Note Helper", "Note", None));
+    }
+
+    #[test]
+    fn test_app_entry_matches_bundle_id() {
+        let bid = Some("com.example.myapp");
+        // Exact bundle id and namespaced children match.
+        assert!(app_entry_matches("com.example.myapp", "MyApp", bid));
+        assert!(app_entry_matches("com.example.myapp.helper", "MyApp", bid));
+        // Group containers match.
+        assert!(app_entry_matches("group.com.example.myapp", "MyApp", bid));
+        assert!(app_entry_matches("group.com.example.myapp.shared", "MyApp", bid));
+        // A different bundle id sharing a prefix must NOT match.
+        assert!(!app_entry_matches("com.example.myapptwo", "MyApp", bid));
+        assert!(!app_entry_matches("com.example.other", "MyApp", bid));
+    }
+
+    #[test]
+    fn test_is_safe_app_name() {
+        // Too short.
+        assert!(!is_safe_app_name("go"));
+        assert!(!is_safe_app_name("a"));
+        assert!(!is_safe_app_name(""));
+        // Generic names rejected.
+        assert!(!is_safe_app_name("cache"));
+        assert!(!is_safe_app_name("App"));
+        assert!(!is_safe_app_name("data"));
+        // Specific names accepted.
+        assert!(is_safe_app_name("Docker"));
+        assert!(is_safe_app_name("Slack"));
+        assert!(is_safe_app_name("Code"));
+    }
+
+    #[test]
+    fn test_find_app_files_rejects_unsafe_name() {
+        // A too-short name must return an error rather than a broad match.
+        assert!(ApplicationScanner::find_app_files("go").is_err());
+        assert!(ApplicationScanner::find_app_files("a").is_err());
     }
 }

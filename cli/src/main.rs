@@ -1207,7 +1207,11 @@ fn cmd_apps(action: AppsAction) -> Result<()> {
                 return Ok(());
             }
 
-            let result = ApplicationScanner::uninstall_app(&name, &options)?;
+            // Delete the exact list found and confirmed above. Passing the
+            // captured `files` (rather than re-scanning inside uninstall_app)
+            // closes the TOCTOU window and guarantees we remove precisely what
+            // the user approved (GitLab #13).
+            let result = ApplicationScanner::uninstall_app(&files, &options)?;
             display_clean_results(&result, dry_run);
         }
     }
