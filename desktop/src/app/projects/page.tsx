@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   FolderGit2,
@@ -10,7 +10,6 @@ import {
   ArrowUpDown,
   Filter,
   Loader2,
-  GitBranch,
   AlertCircle,
   Check,
   X,
@@ -19,9 +18,6 @@ import {
   Clock,
   HardDrive,
   Settings,
-  ArrowUp,
-  GitCommitHorizontal,
-  Upload,
   FolderOpen,
   Trash2,
   ChevronRight,
@@ -60,8 +56,11 @@ import type {
   ArchiveStatusResponse,
   ArchiveConfigResponse,
   GitStatus,
+  ProjectSizePayload,
+  GroupSizePayload,
 } from '@/lib/types';
 import { formatBytes } from '@/lib/types';
+import { ProjectRow } from '@/components/ProjectRow';
 
 type SortField = 'last_modified' | 'size' | 'name';
 type Tab = 'active' | 'archived';
@@ -133,6 +132,105 @@ export default function ProjectsPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
+  // ── Streamed-update coalescing ───────────────────────────────────────────
+  // The backend emits one event per project/group/git-status as it finishes
+  // scanning. Applying each event as its own setState re-renders (and, with the
+  // old `layout` prop, re-measures) the entire list on every event, which froze
+  // the main thread. Instead we buffer incoming payloads in refs and flush them
+  // in a single setState per animation frame.
+  const sizeBufferRef = useRef<Map<string, ProjectSizePayload>>(new Map());
+  const groupBufferRef = useRef<Map<string, GroupSizePayload>>(new Map());
+  const gitBufferRef = useRef<Map<string, GitStatus>>(new Map());
+  const flushFrameRef = useRef<number | null>(null);
+
+  const flushBuffers = useCallback(() => {
+    flushFrameRef.current = null;
+
+    const sizes = sizeBufferRef.current;
+    const groups = groupBufferRef.current;
+    const gits = gitBufferRef.current;
+
+    if (sizes.size > 0 || groups.size > 0) {
+      setTreeEntries(prev => prev.map(entry => {
+        if (entry.kind === 'Project') {
+          const payload = sizes.get(entry.path);
+          if (payload) {
+            return {
+              ...entry,
+              size_bytes: payload.size_bytes,
+              artifact_size: payload.artifact_size,
+              last_commit_time: payload.last_commit_time ?? entry.last_commit_time,
+            };
+          }
+          return entry;
+        }
+        // Group: may have its own size payload and/or child size payloads.
+        const groupPayload = groups.get(entry.path);
+        let nextChildren = entry.children;
+        let childrenChanged = false;
+        if (sizes.size > 0) {
+          nextChildren = entry.children.map(c => {
+            const payload = sizes.get(c.path);
+            if (payload) {
+              childrenChanged = true;
+              return {
+                ...c,
+                size_bytes: payload.size_bytes,
+                artifact_size: payload.artifact_size,
+                last_commit_time: payload.last_commit_time ?? c.last_commit_time,
+              };
+            }
+            return c;
+          });
+        }
+        if (groupPayload || childrenChanged) {
+          return {
+            ...entry,
+            ...(groupPayload
+              ? { size_bytes: groupPayload.size_bytes, artifact_size: groupPayload.artifact_size }
+              : {}),
+            ...(childrenChanged ? { children: nextChildren } : {}),
+          };
+        }
+        return entry;
+      }));
+      sizes.clear();
+      groups.clear();
+    }
+
+    if (gits.size > 0) {
+      setGitStatuses(prev => {
+        const next = new Map(prev);
+        gits.forEach((status, path) => next.set(path, status));
+        return next;
+      });
+      gits.clear();
+    }
+  }, []);
+
+  // Schedule a single flush on the next animation frame, coalescing any other
+  // payloads buffered before it fires.
+  const scheduleFlush = useCallback(() => {
+    if (flushFrameRef.current != null) return;
+    if (typeof requestAnimationFrame === 'undefined') {
+      // Non-browser fallback (SSR/tests): flush synchronously.
+      flushBuffers();
+      return;
+    }
+    flushFrameRef.current = requestAnimationFrame(flushBuffers);
+  }, [flushBuffers]);
+
+  // Flush any buffered updates on unmount so no payload is lost.
+  useEffect(() => {
+    return () => {
+      if (flushFrameRef.current != null) {
+        cancelAnimationFrame(flushFrameRef.current);
+        flushFrameRef.current = null;
+      }
+      flushBuffers();
+    };
+  }, [flushBuffers]);
+
   // Derive flat list of all projects (for size/git scanning)
   const allProjects = useMemo(() => {
     return treeEntries.flatMap(entry =>
@@ -191,49 +289,19 @@ export default function ProjectsPage() {
     let mounted = true;
 
     const setup = async () => {
+      // Buffer per-project sizes and flush them once per animation frame
+      // (handles both standalone projects and group children, keyed by path).
       unlistenProject = await onProjectSizeCalculated((payload) => {
         if (!mounted) return;
-        // Update child projects inside groups AND standalone projects
-        setTreeEntries(prev => prev.map(entry => {
-          if (entry.kind === 'Project' && entry.path === payload.path) {
-            return {
-              ...entry,
-              size_bytes: payload.size_bytes,
-              artifact_size: payload.artifact_size,
-              last_commit_time: payload.last_commit_time ?? entry.last_commit_time,
-            };
-          }
-          if (entry.kind === 'Group') {
-            const updatedChildren = entry.children.map(c =>
-              c.path === payload.path
-                ? {
-                    ...c,
-                    size_bytes: payload.size_bytes,
-                    artifact_size: payload.artifact_size,
-                    last_commit_time: payload.last_commit_time ?? c.last_commit_time,
-                  }
-                : c
-            );
-            if (updatedChildren !== entry.children) {
-              return { ...entry, children: updatedChildren };
-            }
-          }
-          return entry;
-        }));
+        sizeBufferRef.current.set(payload.path, payload);
+        scheduleFlush();
       });
 
+      // Buffer per-group sizes the same way.
       unlistenGroup = await onGroupSizeCalculated((payload) => {
         if (!mounted) return;
-        setTreeEntries(prev => prev.map(entry => {
-          if (entry.kind === 'Group' && entry.path === payload.path) {
-            return {
-              ...entry,
-              size_bytes: payload.size_bytes,
-              artifact_size: payload.artifact_size,
-            };
-          }
-          return entry;
-        }));
+        groupBufferRef.current.set(payload.path, payload);
+        scheduleFlush();
       });
 
       // Gather all items to scan
@@ -276,7 +344,7 @@ export default function ProjectsPage() {
       unlistenProject?.();
       unlistenGroup?.();
     };
-  }, [treeEntries.length, sizesLoaded, archiveConfig]);
+  }, [treeEntries.length, sizesLoaded, archiveConfig, scheduleFlush]);
 
   // Background git status scanning (batched)
   useEffect(() => {
@@ -287,13 +355,11 @@ export default function ProjectsPage() {
     let mounted = true;
 
     const setup = async () => {
+      // Buffer git statuses and flush them once per animation frame.
       unlisten = await onProjectGitStatus((payload) => {
         if (!mounted) return;
-        setGitStatuses(prev => {
-          const next = new Map(prev);
-          next.set(payload.path, payload.status);
-          return next;
-        });
+        gitBufferRef.current.set(payload.path, payload.status);
+        scheduleFlush();
       });
 
       const batchSize = archiveConfig?.scan_batch_size ?? 3;
@@ -312,7 +378,7 @@ export default function ProjectsPage() {
       mounted = false;
       unlisten?.();
     };
-  }, [allProjects.length, gitStatusesLoaded]);
+  }, [allProjects.length, gitStatusesLoaded, archiveConfig, scheduleFlush]);
 
   // Archive progress events
   useEffect(() => {
@@ -382,14 +448,14 @@ export default function ProjectsPage() {
   }, [sortBy, sortAsc]);
 
   // Selection helpers
-  const toggleSelect = (path: string) => {
+  const toggleSelect = useCallback((path: string) => {
     setSelectedPaths(prev => {
       const next = new Set(prev);
       if (next.has(path)) next.delete(path);
       else next.add(path);
       return next;
     });
-  };
+  }, []);
 
   const selectAll = () => {
     if (tab === 'active') {
@@ -461,7 +527,7 @@ export default function ProjectsPage() {
   };
 
   // Git actions
-  const handleAutoCommit = async (path: string, e: React.MouseEvent) => {
+  const handleAutoCommit = useCallback(async (path: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setActionLoading(prev => new Map(prev).set(path, 'commit'));
     setError(null);
@@ -480,9 +546,9 @@ export default function ProjectsPage() {
         return next;
       });
     }
-  };
+  }, []);
 
-  const handlePushAll = async (path: string, e: React.MouseEvent) => {
+  const handlePushAll = useCallback(async (path: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setActionLoading(prev => new Map(prev).set(path, 'push'));
     setError(null);
@@ -506,20 +572,20 @@ export default function ProjectsPage() {
         return next;
       });
     }
-  };
+  }, []);
 
   // Open project in Finder
-  const handleOpenInFinder = async (path: string, e: React.MouseEvent) => {
+  const handleOpenInFinder = useCallback(async (path: string, e: React.MouseEvent) => {
     e.stopPropagation();
     try {
       await openProjectInFinder(path);
     } catch (err) {
       setError(err as string);
     }
-  };
+  }, []);
 
   // Delete project
-  const handleDeleteProject = async (path: string) => {
+  const handleDeleteProject = useCallback(async (path: string) => {
     setDeleteConfirm(null);
     setActionLoading(prev => new Map(prev).set(path, 'delete'));
     setError(null);
@@ -543,7 +609,11 @@ export default function ProjectsPage() {
         return next;
       });
     }
-  };
+  }, []);
+
+  // Stable delete-confirm callbacks for ProjectRow (request / cancel).
+  const handleRequestDelete = useCallback((path: string) => setDeleteConfirm(path), []);
+  const handleCancelDelete = useCallback(() => setDeleteConfirm(null), []);
 
   // Available project types for filter
   const availableTypes = useMemo(() => {
@@ -564,129 +634,6 @@ export default function ProjectsPage() {
     }
   };
 
-  // Render a project row (used for both standalone and group children)
-  const renderProjectRow = (project: ProjectInfo, indent: boolean = false) => {
-    const typeConf = projectTypeConfig[project.project_type];
-    const displayTime = project.last_commit_time ?? project.last_modified;
-    const gitStatus = gitStatuses.get(project.path);
-    const isCommitting = actionLoading.get(project.path) === 'commit';
-    const isPushing = actionLoading.get(project.path) === 'push';
-    const totalAhead = gitStatus?.remotes.reduce((s, r) => s + r.ahead, 0) ?? 0;
-
-    return (
-      <div
-        key={project.path}
-        className={clsx(
-          'flex items-center gap-3 py-2.5 rounded-xl transition-all group',
-          indent ? 'px-4 pl-12 bg-white/[0.02] hover:bg-white/[0.05]' : 'px-4'
-        )}
-      >
-        {/* Indent spacer for children (no checkbox) */}
-        {indent && <div className="w-4 flex-shrink-0" />}
-
-        {/* Project info */}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className={clsx('font-medium truncate', indent ? 'text-slate-300 text-sm' : 'text-white')}>{project.name}</span>
-            <span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full border font-medium', typeConf.color)}>
-              {typeConf.label}
-            </span>
-            {project.has_git && (
-              <GitBranch className="w-3 h-3 text-slate-500" />
-            )}
-            {gitStatus?.current_branch && (
-              <span className="text-[10px] text-slate-500 font-mono">
-                {gitStatus.current_branch}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-2 mt-0.5">
-            <p className="text-xs text-slate-500 font-mono truncate">
-              {project.path}
-            </p>
-            {gitStatus && gitStatus.has_uncommitted && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 flex-shrink-0 flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-yellow-400" />
-                {gitStatus.uncommitted_count} changes
-              </span>
-            )}
-            {gitStatus && totalAhead > 0 && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 flex-shrink-0 flex items-center gap-1">
-                <ArrowUp className="w-2.5 h-2.5" />
-                {totalAhead} unpushed
-              </span>
-            )}
-            {gitStatus && gitStatus.remotes.length > 1 && (
-              <span className="text-[10px] text-slate-600 flex-shrink-0">
-                {gitStatus.remotes.map(r => r.name).join(', ')}
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* Git action buttons */}
-        {gitStatus && (gitStatus.has_uncommitted || totalAhead > 0) && (
-          <div className="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-            {gitStatus.has_uncommitted && (
-              <button
-                onClick={(e) => handleAutoCommit(project.path, e)}
-                disabled={isCommitting}
-                className="px-2 py-1 rounded-lg text-[10px] font-medium bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 hover:bg-yellow-500/20 transition-all flex items-center gap-1"
-                title="Auto commit all changes"
-              >
-                {isCommitting ? (
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                ) : (
-                  <GitCommitHorizontal className="w-3 h-3" />
-                )}
-                Commit
-              </button>
-            )}
-            {totalAhead > 0 && (
-              <button
-                onClick={(e) => handlePushAll(project.path, e)}
-                disabled={isPushing}
-                className="px-2 py-1 rounded-lg text-[10px] font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20 transition-all flex items-center gap-1"
-                title={`Push to ${gitStatus.remotes.map(r => r.name).join(', ')}`}
-              >
-                {isPushing ? (
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                ) : (
-                  <Upload className="w-3 h-3" />
-                )}
-                Push All
-              </button>
-            )}
-          </div>
-        )}
-
-        {/* Artifact badge */}
-        {project.artifact_size != null && project.artifact_size > 0 && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 flex-shrink-0">
-            {formatBytes(project.artifact_size)} artifacts
-          </span>
-        )}
-
-        {/* Size */}
-        <div className="text-right flex-shrink-0 w-20">
-          {project.size_bytes != null ? (
-            <span className="text-sm font-medium text-slate-300">
-              {formatBytes(project.size_bytes)}
-            </span>
-          ) : (
-            <Loader2 className="w-3 h-3 text-slate-600 animate-spin ml-auto" />
-          )}
-        </div>
-
-        {/* Time */}
-        <div className="text-right flex-shrink-0 w-20">
-          <span className="text-xs text-slate-500">
-            {relativeTime(displayTime)}
-          </span>
-        </div>
-      </div>
-    );
-  };
 
   if (!isTauri()) {
     return (
@@ -883,169 +830,23 @@ export default function ProjectsPage() {
               const isSelected = selectedPaths.has(entryPath);
 
               if (entry.kind === 'Project') {
-                // Standalone project row
-                const project = entry as ProjectInfo & { kind: 'Project' };
-                const typeConf = projectTypeConfig[entry.project_type];
-                const displayTime = entry.last_commit_time ?? entry.last_modified;
-                const gitStatus = gitStatuses.get(entry.path);
-                const isCommitting = actionLoading.get(entry.path) === 'commit';
-                const isPushing = actionLoading.get(entry.path) === 'push';
-                const totalAhead = gitStatus?.remotes.reduce((s, r) => s + r.ahead, 0) ?? 0;
-
+                // Standalone project row (shared <ProjectRow>, memoized).
                 return (
-                  <motion.div
+                  <ProjectRow
                     key={entry.path}
-                    layout
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    className={clsx(
-                      'flex items-center gap-3 px-4 py-3 rounded-xl transition-all group cursor-pointer',
-                      isSelected
-                        ? 'bg-brand-500/10 border border-brand-500/20'
-                        : 'bg-white/5 border border-transparent hover:bg-white/10 hover:border-white/5'
-                    )}
-                    onClick={() => toggleSelect(entry.path)}
-                  >
-                    {/* Checkbox */}
-                    <button className="flex-shrink-0 text-slate-500 hover:text-brand-400 transition-colors">
-                      {isSelected
-                        ? <CheckSquare className="w-4 h-4 text-brand-400" />
-                        : <Square className="w-4 h-4" />}
-                    </button>
-
-                    {/* Project info */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-white truncate">{entry.name}</span>
-                        <span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full border font-medium', typeConf.color)}>
-                          {typeConf.label}
-                        </span>
-                        {entry.has_git && (
-                          <GitBranch className="w-3 h-3 text-slate-500" />
-                        )}
-                        {gitStatus?.current_branch && (
-                          <span className="text-[10px] text-slate-500 font-mono">
-                            {gitStatus.current_branch}
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <p className="text-xs text-slate-500 font-mono truncate">
-                          {entry.path}
-                        </p>
-                        {gitStatus && gitStatus.has_uncommitted && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 flex-shrink-0 flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-yellow-400" />
-                            {gitStatus.uncommitted_count} changes
-                          </span>
-                        )}
-                        {gitStatus && totalAhead > 0 && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 flex-shrink-0 flex items-center gap-1">
-                            <ArrowUp className="w-2.5 h-2.5" />
-                            {totalAhead} unpushed
-                          </span>
-                        )}
-                        {gitStatus && gitStatus.remotes.length > 1 && (
-                          <span className="text-[10px] text-slate-600 flex-shrink-0">
-                            {gitStatus.remotes.map(r => r.name).join(', ')}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Git action buttons */}
-                    {gitStatus && (gitStatus.has_uncommitted || totalAhead > 0) && (
-                      <div className="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                        {gitStatus.has_uncommitted && (
-                          <button
-                            onClick={(e) => handleAutoCommit(entry.path, e)}
-                            disabled={isCommitting}
-                            className="px-2 py-1 rounded-lg text-[10px] font-medium bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 hover:bg-yellow-500/20 transition-all flex items-center gap-1"
-                            title="Auto commit all changes"
-                          >
-                            {isCommitting ? <Loader2 className="w-3 h-3 animate-spin" /> : <GitCommitHorizontal className="w-3 h-3" />}
-                            Commit
-                          </button>
-                        )}
-                        {totalAhead > 0 && (
-                          <button
-                            onClick={(e) => handlePushAll(entry.path, e)}
-                            disabled={isPushing}
-                            className="px-2 py-1 rounded-lg text-[10px] font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20 transition-all flex items-center gap-1"
-                            title={`Push to ${gitStatus.remotes.map(r => r.name).join(', ')}`}
-                          >
-                            {isPushing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />}
-                            Push All
-                          </button>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Open / Delete buttons */}
-                    <div className="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={(e) => handleOpenInFinder(entry.path, e)}
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-all"
-                        title="Open in Finder"
-                      >
-                        <FolderOpen className="w-3.5 h-3.5" />
-                      </button>
-                      {deleteConfirm === entry.path ? (
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleDeleteProject(entry.path); }}
-                            className="px-2 py-1 rounded-lg text-[10px] font-medium bg-danger-500/20 text-danger-400 border border-danger-500/30 hover:bg-danger-500/30 transition-all"
-                          >
-                            Confirm
-                          </button>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); setDeleteConfirm(null); }}
-                            className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-all"
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); setDeleteConfirm(entry.path); }}
-                          disabled={actionLoading.get(entry.path) === 'delete'}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-danger-400 hover:bg-danger-500/10 transition-all"
-                          title="Delete project"
-                        >
-                          {actionLoading.get(entry.path) === 'delete' ? (
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          ) : (
-                            <Trash2 className="w-3.5 h-3.5" />
-                          )}
-                        </button>
-                      )}
-                    </div>
-
-                    {/* Artifact badge */}
-                    {entry.artifact_size != null && entry.artifact_size > 0 && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 flex-shrink-0">
-                        {formatBytes(entry.artifact_size)} artifacts
-                      </span>
-                    )}
-
-                    {/* Size */}
-                    <div className="text-right flex-shrink-0 w-20">
-                      {entry.size_bytes != null ? (
-                        <span className="text-sm font-medium text-slate-300">
-                          {formatBytes(entry.size_bytes)}
-                        </span>
-                      ) : (
-                        <Loader2 className="w-3 h-3 text-slate-600 animate-spin ml-auto" />
-                      )}
-                    </div>
-
-                    {/* Time */}
-                    <div className="text-right flex-shrink-0 w-20">
-                      <span className="text-xs text-slate-500">
-                        {relativeTime(displayTime)}
-                      </span>
-                    </div>
-                  </motion.div>
+                    project={entry}
+                    gitStatus={gitStatuses.get(entry.path)}
+                    isSelected={isSelected}
+                    actionKind={actionLoading.get(entry.path)}
+                    confirmingDelete={deleteConfirm === entry.path}
+                    onToggleSelect={toggleSelect}
+                    onCommit={handleAutoCommit}
+                    onPush={handlePushAll}
+                    onOpenInFinder={handleOpenInFinder}
+                    onRequestDelete={handleRequestDelete}
+                    onCancelDelete={handleCancelDelete}
+                    onConfirmDelete={handleDeleteProject}
+                  />
                 );
               }
 
@@ -1057,7 +858,6 @@ export default function ProjectsPage() {
               return (
                 <div key={group.path}>
                   <motion.div
-                    layout
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     className={clsx(
@@ -1185,7 +985,17 @@ export default function ProjectsPage() {
                       >
                         {sortChildren(
                           group.children.filter(c => filterType === 'all' || c.project_type === filterType)
-                        ).map(child => renderProjectRow(child, true))}
+                        ).map(child => (
+                          <ProjectRow
+                            key={child.path}
+                            project={child}
+                            indent
+                            gitStatus={gitStatuses.get(child.path)}
+                            actionKind={actionLoading.get(child.path)}
+                            onCommit={handleAutoCommit}
+                            onPush={handlePushAll}
+                          />
+                        ))}
                       </motion.div>
                     )}
                   </AnimatePresence>
@@ -1222,7 +1032,6 @@ export default function ProjectsPage() {
               return (
                 <motion.div
                   key={project.archived_path}
-                  layout
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   className={clsx(
