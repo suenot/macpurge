@@ -710,6 +710,9 @@ pub async fn delete_project(path: String) -> Result<(), String> {
     if !path_buf.is_dir() {
         return Err("Path is not a directory".to_string());
     }
+    // Guard against deleting a protected location (e.g. a crafted or symlinked
+    // path from the frontend). Validate before the recursive delete.
+    let path_buf = macpurge::validate_delete_target(&path_buf).map_err(|e| e.to_string())?;
     std::fs::remove_dir_all(&path_buf)
         .map_err(|e| format!("Failed to delete project: {}", e))
 }

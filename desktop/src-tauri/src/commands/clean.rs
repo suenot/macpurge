@@ -120,6 +120,25 @@ pub async fn clean_artifacts(
             continue;
         }
 
+        // Guard against deleting a protected location (e.g. a crafted or
+        // symlinked path from the frontend). Validate before any deletion.
+        if let Err(e) = macpurge::validate_delete_target(&path) {
+            let error_msg = format!("{}: {}", path_str, e);
+            total_result.errors.push(error_msg);
+            let _ = app.emit(
+                "clean-progress",
+                CleanProgressPayload {
+                    current_index: index,
+                    total_items,
+                    current_path: path_str.clone(),
+                    status: "error".to_string(),
+                    bytes_freed: 0,
+                    error: Some(e.to_string()),
+                },
+            );
+            continue;
+        }
+
         match macpurge::remove_path(&path, dry_run, use_trash) {
             Ok(bytes) => {
                 total_result.items_removed += 1;

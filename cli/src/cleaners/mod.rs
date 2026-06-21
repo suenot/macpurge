@@ -98,6 +98,12 @@ pub fn remove_path(path: &Path, dry_run: bool, use_trash: bool) -> Result<u64> {
         return Ok(size);
     }
 
+    // Defense in depth: never delete a protected location, even if a caller or
+    // the frontend supplied a crafted or symlinked path. Validation resolves the
+    // real (symlink-followed) path and rejects protected roots; on failure we
+    // return an error and delete nothing.
+    crate::utils::validate_delete_target(path)?;
+
     if use_trash {
         trash::delete(path)
             .map_err(|e| anyhow::anyhow!("Failed to move {} to Trash: {}", path.display(), e))?;

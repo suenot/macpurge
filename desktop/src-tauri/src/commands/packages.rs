@@ -71,6 +71,17 @@ pub fn clean_package_cache(path: String, dry_run: bool) -> Result<CleanCacheResu
         });
     }
 
+    // Guard against deleting a protected location (e.g. a crafted or symlinked
+    // path from the frontend). Validate before any deletion.
+    if let Err(e) = macpurge::validate_delete_target(&cache_path) {
+        return Ok(CleanCacheResult {
+            path,
+            bytes_freed: 0,
+            success: false,
+            message: e.to_string(),
+        });
+    }
+
     // Honor the configured deletion mode (move to Trash vs. permanent delete).
     let use_trash = macpurge::load_config()
         .map(|c| c.cleanup.use_trash)

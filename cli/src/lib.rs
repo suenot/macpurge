@@ -62,6 +62,8 @@ pub use reporters::{
 
 pub use claude::ClaudeIntegration;
 
+pub use utils::validate_delete_target;
+
 pub use config::{
     Config, ScanConfig, CleanupConfig, ScheduleConfig, ScheduleTasks, ArchiveConfig,
     get_config_dir, get_config_path, get_history_path, get_schedule_log_path,

@@ -29,6 +29,12 @@ pub fn scan_ai_tool(tool: String) -> Result<AiToolInfo, String> {
 
 #[tauri::command]
 pub fn clean_ai_model_path(path: String, dry_run: bool) -> Result<CleanResult, String> {
+    // Guard against deleting a protected location (e.g. a crafted or symlinked
+    // path from the frontend). Skip the check for dry-run, which deletes nothing.
+    if !dry_run {
+        macpurge::validate_delete_target(&PathBuf::from(&path)).map_err(|e| e.to_string())?;
+    }
+
     // Honor the configured deletion mode (move to Trash vs. permanent delete).
     let use_trash = macpurge::load_config()
         .map(|c| c.cleanup.use_trash)
