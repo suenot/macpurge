@@ -114,13 +114,15 @@ export function Sidebar() {
         <div className="flex items-center gap-3">
           <div className="relative group">
             <div className="absolute inset-0 bg-brand-500 blur-lg opacity-40 group-hover:opacity-60 transition-opacity" />
-            <div className="relative w-10 h-10 rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center shadow-lg shadow-brand-500/20">
-              <HardDrive className="w-5 h-5 text-white" />
-            </div>
+            <img
+              src="/app-icon.png"
+              alt=""
+              className="relative w-10 h-10 rounded-xl shadow-lg shadow-brand-500/20"
+            />
           </div>
           <div>
             <h1 className="font-bold text-lg text-white tracking-wide">MacPurge</h1>
-            <p className="text-xs text-slate-400">System Cleaner</p>
+            <p className="text-xs text-slate-400">v{process.env.NEXT_PUBLIC_APP_VERSION}</p>
           </div>
         </div>
       </div>
@@ -185,7 +187,7 @@ export function Sidebar() {
       )}
 
       {/* Navigation */}
-      <nav className="flex-1 px-3 space-y-1 overflow-y-auto custom-scrollbar">
+      <nav className="flex-1 px-3 pb-4 space-y-1 overflow-y-auto custom-scrollbar">
         {navItems.map((item) => {
           const Icon = item.icon;
           const isActive = pathname === item.href;
@@ -213,14 +215,6 @@ export function Sidebar() {
           );
         })}
       </nav>
-
-      {/* Version */}
-      <div className="p-4 border-t border-white/5">
-        <div className="flex items-center justify-between text-[10px] text-slate-600">
-          <span>v0.1.0</span>
-          <span>MacPurge Desktop</span>
-        </div>
-      </div>
     </aside>
   );
 }
