@@ -431,11 +431,11 @@ export default function DevPage() {
                     animate={{
                       opacity: isDeleted ? 0.3 : 1,
                       backgroundColor: isDeleting
-                        ? 'rgba(139, 92, 246, 0.1)'
+                        ? 'rgba(238, 111, 19, 0.1)'
                         : hasError
                           ? 'rgba(239, 68, 68, 0.1)'
                           : isSelected
-                            ? 'rgba(139, 92, 246, 0.05)'
+                            ? 'rgba(238, 111, 19, 0.05)'
                             : 'transparent',
                     }}
                     exit={{ opacity: 0, height: 0 }}

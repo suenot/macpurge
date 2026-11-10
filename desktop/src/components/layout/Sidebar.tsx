@@ -21,6 +21,8 @@ import {
   PieChart
 } from 'lucide-react';
 import { clsx } from 'clsx';
+import { motion } from 'framer-motion';
+import { Logo } from './Logo';
 import { useEffect, useState } from 'react';
 import { getUserDisks, onDisksChanged, isTauri } from '@/lib/tauri';
 import type { DiskInfo, DiskType } from '@/lib/types';
@@ -112,14 +114,9 @@ export function Sidebar() {
       {/* Logo */}
       <div className="p-6">
         <div className="flex items-center gap-3">
-          <div className="relative group">
-            <div className="absolute inset-0 bg-brand-500 blur-lg opacity-40 group-hover:opacity-60 transition-opacity" />
-            <img
-              src="/app-icon.png"
-              alt=""
-              className="relative w-10 h-10 rounded-xl shadow-lg shadow-brand-500/20"
-            />
-          </div>
+          <motion.div className="relative" whileHover={{ rotate: 90 }} transition={{ type: 'spring', stiffness: 120, damping: 12 }}>
+            <Logo size={36} />
+          </motion.div>
           <div>
             <h1 className="font-bold text-lg text-white tracking-wide">MacPurge</h1>
             <p className="text-xs text-slate-400">v{process.env.NEXT_PUBLIC_APP_VERSION}</p>
@@ -169,7 +166,7 @@ export function Sidebar() {
                         ? 'bg-danger-500'
                         : usage > 70
                           ? 'bg-yellow-500'
-                          : 'bg-gradient-to-r from-emerald-500 to-brand-500'
+                          : 'bg-gradient-to-r from-ring-violet to-brand-400'
                     )}
                     style={{ width: `${usage}%` }}
                   >
@@ -190,7 +187,7 @@ export function Sidebar() {
       <nav className="flex-1 px-3 pb-4 space-y-1 overflow-y-auto custom-scrollbar">
         {navItems.map((item) => {
           const Icon = item.icon;
-          const isActive = pathname === item.href;
+          const isActive = (pathname?.replace(/(.)\/$/, '$1') ?? '') === item.href;
 
           return (
             <Link
@@ -199,18 +196,24 @@ export function Sidebar() {
               className={clsx(
                 'flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 group relative',
                 isActive
-                  ? 'bg-brand-500/10 text-white'
+                  ? 'text-white'
                   : 'text-slate-400 hover:text-white hover:bg-white/5'
               )}
             >
               {isActive && (
-                <div className="absolute left-0 w-1 h-6 bg-brand-500 rounded-r-full shadow-[0_0_10px_rgba(139,92,246,0.5)]" />
+                <motion.div
+                  layoutId="nav-active"
+                  transition={{ type: 'spring', stiffness: 380, damping: 32 }}
+                  className="absolute inset-0 rounded-xl bg-gradient-to-r from-brand-500/15 to-transparent border border-brand-500/20"
+                >
+                  <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-brand-400 rounded-r-full shadow-[0_0_12px_rgba(245,158,11,0.6)]" />
+                </motion.div>
               )}
               <Icon className={clsx(
-                "w-5 h-5 transition-colors",
+                "w-5 h-5 transition-colors relative",
                 isActive ? "text-brand-400" : "group-hover:text-brand-300"
               )} />
-              <span className="font-medium text-sm tracking-wide">{item.label}</span>
+              <span className="font-medium text-sm tracking-wide relative">{item.label}</span>
             </Link>
           );
         })}

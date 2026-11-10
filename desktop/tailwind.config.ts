@@ -12,18 +12,21 @@ const config: Config = {
       colors: {
         // Modern palette
         brand: {
-          50: '#f5f3ff',
-          100: '#ede9fe',
-          200: '#ddd6fe',
-          300: '#c4b5fd',
-          400: '#a78bfa',
-          500: '#8b5cf6',
-          600: '#7c3aed',
-          700: '#6d28d9',
-          800: '#5b21b6',
-          900: '#4c1d95',
-          950: '#2e1065',
+          50: '#fff7ed',
+          100: '#ffedd5',
+          200: '#fed7aa',
+          300: '#fdba74',
+          400: '#fb923c',
+          500: '#ee6f13',
+          600: '#d85a0a',
+          700: '#b44509',
+          800: '#8f380f',
+          900: '#74300f',
+          950: '#3f1606',
         },
+        // sand/violet come from the logo rings
+        sand: { 300: '#fde1b8', 400: '#f9c98a' },
+        ring: { violet: '#8b5cf6', amber: '#f59e0b', sand: '#fde1b8' },
         // We keep 'purge' mapped to a blue-cyan for "cleaning" actions
         purge: {
           50: '#f0f9ff',
@@ -52,7 +55,7 @@ const config: Config = {
         },
         // Dark mode specifics
         dark: {
-          bg: '#050505', // Deep black
+          bg: '#07060a', // Deep black, slightly violet
           card: '#0F0F0F', // Slightly lighter
           border: '#262626',
         }
