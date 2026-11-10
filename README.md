@@ -2,7 +2,7 @@
 
 Disk cleanup tool for macOS developers. Scans and removes build artifacts, caches, old logs, and unused application data.
 
-Three components: **CLI** (Rust), **Desktop App** (Tauri 2 + Next.js), and **Landing Page** (Next.js).
+Two components: **CLI** (Rust) and **Desktop App** (Tauri 2 + Next.js). The landing page lives in [macpurge-landing](https://github.com/suenot/macpurge-landing).
 
 ## Architecture
 
@@ -12,7 +12,6 @@ macclean/
   desktop/
     src/                  # Next.js 14 frontend (App Router)
     src-tauri/            # Tauri 2 backend (Rust)
-  landing/                # Marketing landing page (Next.js)
 ```
 
 The desktop app imports the CLI crate as a library (`macpurge = { path = "../../cli" }`), so all scanning and cleaning logic is shared.
@@ -82,9 +81,11 @@ The desktop app imports the CLI crate as a library (`macpurge = { path = "../../
 
 ## CLI Usage
 
+Install with Cargo (`cargo install --git https://github.com/suenot/macpurge macpurge`) or from the desktop app: Settings → Command line tool → Install CLI.
+
 ```bash
 # Install
-cd cli && cargo install --path .
+cargo install --git https://github.com/suenot/macpurge macpurge
 
 # Show disk info
 macpurge disks

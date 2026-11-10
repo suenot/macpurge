@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.macpurge.app",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "sh scripts/build-cli.sh && npm run dev",
     "devUrl": "http://localhost:3000",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "sh scripts/build-cli.sh && npm run build",
     "frontendDist": "../out"
   },
   "app": {
@@ -36,13 +36,19 @@
       "icons/128x128.png",
       "icons/128x128@2x.png"
     ],
-    "targets": ["dmg", "app"],
+    "targets": [
+      "dmg",
+      "app"
+    ],
     "macOS": {
       "minimumSystemVersion": "13.0",
       "entitlements": null,
       "exceptionDomain": null,
       "signingIdentity": null
-    }
+    },
+    "resources": [
+      "resources/macpurge"
+    ]
   },
   "plugins": {
     "shell": {

@@ -49,6 +49,8 @@ pub fn run() {
             commands::clean::estimate_cleanup,
             commands::clean::cancel_cleanup,
             commands::clean::is_cleanup_cancelled,
+            commands::cli_install::get_cli_status,
+            commands::cli_install::install_cli,
             commands::config::get_config,
             commands::config::save_config,
             commands::config::add_project_dir,

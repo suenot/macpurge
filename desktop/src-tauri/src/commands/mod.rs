@@ -16,3 +16,4 @@ pub mod schedule;
 pub mod projects;
 pub mod usage;
 pub mod permissions;
+pub mod cli_install;

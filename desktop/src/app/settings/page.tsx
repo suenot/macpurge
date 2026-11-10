@@ -36,6 +36,7 @@ import {
 import type { ConfigResponse, ProjectDir, ArchiveStatusResponse, ArchiveConfigResponse, FolderAccess } from '@/lib/types';
 import { formatBytes } from '@/lib/types';
 import { toMessage } from '@/lib/errors';
+import { CliInstall } from '@/components/CliInstall';
 
 export default function SettingsPage() {
   const [config, setConfig] = useState<ConfigResponse | null>(null);
@@ -394,6 +395,8 @@ export default function SettingsPage() {
           </div>
         )}
       </section>
+
+      <CliInstall />
 
       {/* Project Directories */}
       <section className="glass-card p-6 rounded-2xl">

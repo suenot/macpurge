@@ -408,3 +408,20 @@ export function onUsageScanProgress(callback: (p: UsageScanProgress) => void): P
 export function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI__' in window;
 }
+
+// CLI install
+export interface CliStatus {
+  installed: boolean;
+  path: string | null;
+  version: string | null;
+  on_path: boolean;
+  bundled: boolean;
+}
+
+export async function getCliStatus(): Promise<CliStatus> {
+  return invoke<CliStatus>('get_cli_status');
+}
+
+export async function installCli(): Promise<CliStatus> {
+  return invoke<CliStatus>('install_cli');
+}

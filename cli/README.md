@@ -22,7 +22,7 @@ cargo build --release
 Or install directly:
 
 ```bash
-cargo install --path cli
+cargo install --git https://github.com/suenot/macpurge macpurge
 ```
 
 ## Usage
