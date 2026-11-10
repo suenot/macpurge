@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            arch: arm64
+          - target: x86_64-apple-darwin
+            arch: x64
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            cli
+            desktop/src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: npm ci
+
+      # Builds the CLI (via scripts/build-cli.sh), the app, .dmg and .app, and
+      # attaches them to the GitHub release when run from a tag.
+      - uses: tauri-apps/tauri-action@v0
+        id: tauri
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: desktop
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: MacPurge ${{ github.ref_name }}
+          releaseBody: |
+            Unsigned macOS build. On first launch, right-click the app and choose Open
+            (or run `xattr -cr /Applications/MacPurge.app`).
+
+            CLI only: `cargo install --git https://github.com/suenot/macpurge macpurge`
+            or download `macpurge-<arch>-apple-darwin.tar.gz` below.
+          releaseDraft: false
+          prerelease: false
+          args: --target ${{ matrix.target }} --bundles app,dmg
+
+      - name: Package CLI binary
+        run: |
+          mkdir -p dist
+          cp cli/target/${{ matrix.target }}/release/macpurge dist/macpurge
+          tar -C dist -czf macpurge-${{ matrix.target }}.tar.gz macpurge
+          shasum -a 256 macpurge-${{ matrix.target }}.tar.gz > macpurge-${{ matrix.target }}.tar.gz.sha256
+
+      - name: Upload CLI to release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" macpurge-${{ matrix.target }}.tar.gz macpurge-${{ matrix.target }}.tar.gz.sha256 --clobber
+
+      - name: Upload build artifacts (manual runs)
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macpurge-${{ matrix.arch }}
+          path: |
+            macpurge-${{ matrix.target }}.tar.gz
+            desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
