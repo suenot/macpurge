@@ -11,6 +11,7 @@ pub mod utils;
 pub mod config;
 pub mod recipes;
 pub mod schedule;
+pub mod ops;
 
 pub use scanner::{
     DiskInfo, DiskType, DirectoryScanner, FileType, ScanOptions, ScanResult, ScannedEntry,

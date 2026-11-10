@@ -7,6 +7,9 @@ use std::path::PathBuf;
 
 use macpurge::*;
 
+mod extra;
+mod tui;
+
 #[derive(Parser)]
 #[command(name = "macpurge")]
 #[command(author = "Evgeny <github.com/suenot>")]
@@ -14,7 +17,7 @@ use macpurge::*;
 #[command(about = "CLI tool for cleaning macOS disk space", long_about = None)]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -55,6 +58,22 @@ enum Commands {
         /// Initialize default configuration
         #[arg(long)]
         init: bool,
+
+        /// Set the archive directory for archived projects
+        #[arg(long)]
+        archive_dir: Option<PathBuf>,
+
+        /// Clear the archive directory
+        #[arg(long)]
+        clear_archive_dir: bool,
+
+        /// Add a directory to the global exclude list
+        #[arg(long)]
+        exclude: Option<PathBuf>,
+
+        /// Remove a directory from the global exclude list
+        #[arg(long)]
+        unexclude: Option<PathBuf>,
     },
 
     /// Scan directory for cleanable items
@@ -169,6 +188,85 @@ enum Commands {
     Schedule {
         #[command(subcommand)]
         action: ScheduleCommand,
+    },
+
+    /// Open the interactive terminal UI (default when run in a terminal)
+    Tui,
+
+    /// Show what takes disk space as a size tree (like the Disk Usage view)
+    Usage {
+        /// Directory to analyze (default: home)
+        path: Option<PathBuf>,
+        /// How many levels to show
+        #[arg(long, default_value = "2")]
+        depth: usize,
+        /// Items per level
+        #[arg(long, default_value = "10")]
+        top: usize,
+        /// Output format (text, json)
+        #[arg(long, short, default_value = "text")]
+        output: String,
+    },
+
+    /// Manage projects: list, git status, commit, push, archive, restore, delete
+    Projects {
+        #[command(subcommand)]
+        action: extra::ProjectsAction,
+    },
+
+    /// Move arbitrary paths to the Trash (validated against protected locations)
+    CleanPath {
+        paths: Vec<PathBuf>,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long, short)]
+        yes: bool,
+    },
+
+    /// Clean package manager caches (all managers, or one with --manager)
+    CleanPackages {
+        #[arg(long)]
+        manager: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long, short)]
+        yes: bool,
+    },
+
+    /// Clean dev tool caches (Xcode, Android Studio, Docker, VMs)
+    CleanDevtools {
+        #[arg(long)]
+        tool: Option<String>,
+        /// Only this category (as printed by scan-devtools)
+        #[arg(long)]
+        category: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long, short)]
+        yes: bool,
+    },
+
+    /// Clean AI models; --model selects by path or name substring
+    CleanAi {
+        #[arg(long)]
+        tool: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long, short)]
+        yes: bool,
+    },
+
+    /// Clean a system category (user_cache, browser_cache, system_logs, ios_backups, trash, downloads_old, mail_caches)
+    CleanSystem {
+        category: String,
+        #[arg(long)]
+        min_age_days: Option<u64>,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long, short)]
+        yes: bool,
     },
 }
 
@@ -517,9 +615,21 @@ enum ScheduleCommand {
 }
 
 fn main() -> Result<()> {
+    use std::io::IsTerminal;
     let cli = Cli::parse();
 
-    match cli.command {
+    let command = match cli.command {
+        Some(c) => c,
+        None if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() => Commands::Tui,
+        None => {
+            use clap::CommandFactory;
+            Cli::command().print_help()?;
+            return Ok(());
+        }
+    };
+
+    match command {
+        Commands::Tui => tui::run()?,
         Commands::ScanDev {
             dirs,
             min_size,
@@ -534,8 +644,31 @@ fn main() -> Result<()> {
             remove_dir,
             show,
             init,
+            archive_dir,
+            clear_archive_dir,
+            exclude,
+            unexclude,
         } => {
-            cmd_config(add_dir, remove_dir, show, init)?;
+            let extra_change = archive_dir.is_some() || clear_archive_dir || exclude.is_some() || unexclude.is_some();
+            if let Some(d) = archive_dir {
+                ops::set_archive_dir(Some(d.clone()))?;
+                println!("Archive directory set to {}", d.display());
+            }
+            if clear_archive_dir {
+                ops::set_archive_dir(None)?;
+                println!("Archive directory cleared");
+            }
+            if let Some(d) = exclude {
+                ops::update_excluded_dir(&d, true)?;
+                println!("Excluded {}", d.display());
+            }
+            if let Some(d) = unexclude {
+                ops::update_excluded_dir(&d, false)?;
+                println!("No longer excluded {}", d.display());
+            }
+            if !extra_change || add_dir.is_some() || remove_dir.is_some() || show || init {
+                cmd_config(add_dir, remove_dir, show, init)?;
+            }
         }
 
         Commands::Scan {
@@ -593,6 +726,14 @@ fn main() -> Result<()> {
         Commands::Schedule { action } => {
             cmd_schedule(action)?;
         }
+
+        Commands::Usage { path, depth, top, output } => extra::cmd_usage(path, depth, top, output)?,
+        Commands::Projects { action } => extra::cmd_projects(action)?,
+        Commands::CleanPath { paths, dry_run, yes } => extra::cmd_clean_path(paths, dry_run, yes)?,
+        Commands::CleanPackages { manager, dry_run, yes } => extra::cmd_clean_packages(manager, dry_run, yes)?,
+        Commands::CleanDevtools { tool, category, dry_run, yes } => extra::cmd_clean_devtools(tool, category, dry_run, yes)?,
+        Commands::CleanAi { tool, model, dry_run, yes } => extra::cmd_clean_ai(tool, model, dry_run, yes)?,
+        Commands::CleanSystem { category, min_age_days, dry_run, yes } => extra::cmd_clean_system(category, min_age_days, dry_run, yes)?,
     }
 
     Ok(())

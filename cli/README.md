@@ -94,6 +94,25 @@ macpurge apps remnants
 macpurge apps uninstall "App Name"
 ```
 
+### Interactive TUI
+
+Run `macpurge` in a terminal (or `macpurge tui`) for a full-screen UI with every section of the desktop app: Disk Usage, Projects, Dev Artifacts, Packages, System, Applications, Dev Tools, AI Models, Recipes, Schedule, Settings.
+
+`j/k` move · `Tab` switch pane · `Space` select · `a` all · `d` move to Trash (asks first) · `D` dry run · `o` reveal in Finder · `/` filter · `r` rescan · `c`/`p`/`A` commit/push/archive (Projects) · `?` help · `q` quit
+
+### Scripting commands
+
+```bash
+macpurge usage ~/projects --depth 2 --top 10     # size tree
+macpurge projects list | status | commit | push | archive | archives | restore | delete
+macpurge clean-path PATH... [--dry-run]          # to Trash, protected paths refused
+macpurge clean-packages [--manager npm]          # package caches
+macpurge clean-devtools xcode|android|docker|vm
+macpurge clean-ai --tool ollama --model NAME     # --model is required
+macpurge clean-system trash|user_cache|browser_cache|system_logs|...
+macpurge config --archive-dir PATH --exclude PATH
+```
+
 ### Disk Information
 
 ```bash
