@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Shield,
   RefreshCw,
@@ -18,6 +18,7 @@ import { motion } from 'framer-motion';
 import { scanSystem, cleanSystemCategory, isTauri } from '@/lib/tauri';
 import type { SystemScanResult, SystemCategoryInfo } from '@/lib/types';
 import { formatBytes } from '@/lib/types';
+import { IS_DEMO } from '@/lib/bridge';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useConfirmBeforeDelete } from '@/hooks/useConfirmBeforeDelete';
 
@@ -56,6 +57,12 @@ export default function SystemPage() {
       setScanning(false);
     }
   };
+
+  // Website demo only: scan on open so the list is populated.
+  useEffect(() => {
+    if (IS_DEMO) handleScan();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const toggleCategory = (cat: string) => {
     setSelected((prev) => {

@@ -29,6 +29,7 @@ import {
   onUsageScanProgress,
   isTauri,
 } from '@/lib/tauri';
+import { IS_DEMO } from '@/lib/bridge';
 import type { UsageNode, UsageScanProgress, DiskInfo } from '@/lib/types';
 import { formatBytes } from '@/lib/types';
 import { toMessage } from '@/lib/errors';
@@ -143,6 +144,14 @@ export default function DiskPage() {
       setPhase('idle');
     }
   }, [scanRoot]);
+
+  // Website demo only: start the scan automatically so the sunburst shows at once.
+  const autoScanned = useRef(false);
+  useEffect(() => {
+    if (!IS_DEMO || !scanRoot || autoScanned.current) return;
+    autoScanned.current = true;
+    handleScan();
+  }, [scanRoot, handleScan]);
 
   // Subscribe to live progress only while scanning.
   useEffect(() => {

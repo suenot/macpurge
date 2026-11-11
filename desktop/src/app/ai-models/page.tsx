@@ -1,12 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { BrainCircuit, Boxes, Box, Cloud, Image as ImageIcon, RefreshCw, Trash2, Loader2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { motion } from 'framer-motion';
 import { scanAiModels, cleanAiModelPath, isTauri } from '@/lib/tauri';
 import type { AiModelScanResult, AiModelPath } from '@/lib/types';
 import { formatBytes } from '@/lib/types';
+import { IS_DEMO } from '@/lib/bridge';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useConfirmBeforeDelete } from '@/hooks/useConfirmBeforeDelete';
 
@@ -54,6 +55,12 @@ export default function AiModelsPage() {
       setScanning(false);
     }
   };
+
+  // Website demo only: scan on open so the list is populated.
+  useEffect(() => {
+    if (IS_DEMO) handleScan();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const togglePath = (path: string) => {
     setSelected(prev => {

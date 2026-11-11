@@ -1,12 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Monitor, Smartphone, Box, HardDrive, RefreshCw, Trash2, Loader2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { motion } from 'framer-motion';
 import { scanDevtools, cleanDevtoolCache, isTauri } from '@/lib/tauri';
 import type { DevToolScanResult, DevToolInfo, DevToolCachePath } from '@/lib/types';
 import { formatBytes } from '@/lib/types';
+import { IS_DEMO } from '@/lib/bridge';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useConfirmBeforeDelete } from '@/hooks/useConfirmBeforeDelete';
 
@@ -41,6 +42,12 @@ export default function DevToolsPage() {
       setScanning(false);
     }
   };
+
+  // Website demo only: scan on open so the list is populated.
+  useEffect(() => {
+    if (IS_DEMO) handleScan();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const togglePath = (path: string) => {
     setSelected(prev => {

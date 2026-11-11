@@ -1,7 +1,6 @@
 // Tauri API wrappers
 
-import { invoke } from '@tauri-apps/api/core';
-import { listen, UnlistenFn } from '@tauri-apps/api/event';
+import { invoke, listen, IS_DEMO, type UnlistenFn } from './bridge';
 import type {
   DiskInfo,
   FreeSpaceInfo,
@@ -406,7 +405,7 @@ export function onUsageScanProgress(callback: (p: UsageScanProgress) => void): P
 
 // Helper to check if running in Tauri
 export function isTauri(): boolean {
-  return typeof window !== 'undefined' && '__TAURI__' in window;
+  return IS_DEMO || (typeof window !== 'undefined' && '__TAURI__' in window);
 }
 
 // CLI install
