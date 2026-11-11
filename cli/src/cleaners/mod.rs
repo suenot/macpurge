@@ -131,7 +131,7 @@ pub fn remove_path(path: &Path, dry_run: bool, use_trash: bool) -> Result<u64> {
         // `trash::delete` on a symlink removes only the link, not its target
         // (it does not recurse through the link), so this is safe for symlinks,
         // regular files, and real directories alike.
-        trash::delete(path)
+        trash_silently(path)
             .map_err(|e| anyhow::anyhow!("Failed to move {} to Trash: {}", path.display(), e))?;
     } else if is_symlink {
         // The path itself is a symlink: remove ONLY the link. `remove_file`
@@ -184,5 +184,22 @@ mod tests {
         assert!(real_dir.is_dir(), "the real target directory must survive");
         assert!(real_file.is_file(), "the file inside the target must survive");
         assert_eq!(std::fs::read(&real_file).unwrap(), b"important data");
+    }
+}
+
+/// Move to the Trash without Finder's trash sound. The default `trash::delete`
+/// asks Finder via osascript, which plays the sound on every item; NSFileManager
+/// is silent (and faster), at the cost of Finder's "Put Back" menu entry.
+fn trash_silently(path: &Path) -> Result<(), trash::Error> {
+    #[cfg(target_os = "macos")]
+    {
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+        let mut ctx = trash::TrashContext::default();
+        ctx.set_delete_method(DeleteMethod::NsFileManager);
+        ctx.delete(path)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        trash::delete(path)
     }
 }
