@@ -25,6 +25,8 @@ import { motion } from 'framer-motion';
 import { Logo } from './Logo';
 import { useEffect, useState } from 'react';
 import { getUserDisks, onDisksChanged, isTauri } from '@/lib/tauri';
+import { IS_DEMO } from '@/lib/bridge';
+import { DEMO_DISKS } from '@/lib/demo/disks';
 import type { DiskInfo, DiskType } from '@/lib/types';
 import { formatBytes } from '@/lib/types';
 
@@ -61,9 +63,13 @@ function diskTypeLabel(type: DiskType): string {
   }
 }
 
+// Survives remounts so the disk card never disappears while a page reloads.
+let cachedDisks: DiskInfo[] = IS_DEMO ? DEMO_DISKS : [];
+
 export function Sidebar() {
   const pathname = usePathname();
-  const [disks, setDisks] = useState<DiskInfo[]>([]);
+  const [disks, setDisksState] = useState<DiskInfo[]>(cachedDisks);
+  const setDisks = (d: DiskInfo[]) => { cachedDisks = d; setDisksState(d); };
 
   useEffect(() => {
     if (!isTauri()) return;
