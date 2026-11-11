@@ -1,6 +1,6 @@
 [package]
 name = "macpurge-desktop"
-version = "0.1.0"
+version = "0.1.1"
 description = "MacPurge Desktop App - Disk cleanup for developers"
 authors = ["Evgeny <github.com/suenot>"]
 edition = "2021"
